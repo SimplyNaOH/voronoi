@@ -14,7 +14,7 @@ The function **voronoi** implements Fortune's Algorithm to generate the voronoi 
 
 The executable with source in voronoi/app/Main.hs uses the Diagrams framework to output an svg of the voronoi diagram of a random set of points. As an example, you can view test.svg:
 
-<img src=https://rawgit.com/SimplyNaOH/voronoi/master/test.svg>.
+<img src=https://cdn.rawgit.com/SimplyNaOH/voronoi/master/test.svg>.
 
 ## TODO:
 
