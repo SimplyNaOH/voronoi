@@ -4,3 +4,6 @@ packages:
 - '.'
 extra-deps:
 resolver: nightly-2016-08-11
+build:
+  library-profiling: true
+  executable-profiling: true
