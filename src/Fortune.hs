@@ -16,6 +16,8 @@ import Data.Maybe (isNothing, fromJust, maybeToList, catMaybes)
 
 import Data.Tuple (swap)
 
+import qualified  Data.Vector.Unboxed as V
+
 
 type Index = Int
 
@@ -33,7 +35,7 @@ data Edge a = Edge Index Index (Point a) (Point a) deriving Show
 
 data State a = State
   {
-    spoints :: [Point a]
+    spoints :: V.Vector (Point a)
   , sevents :: [Event a]
   , sbreaks :: [Breakpoint a]
   , sedges  :: [Edge a]
@@ -46,10 +48,10 @@ data State a = State
     Generate the voronoi diagram (defined by a set of edges) corresponding to
     the given list of centers.
 -}
-voronoi :: (Floating a, Ord a) => [Point a] -> [Edge a]
+voronoi :: (Floating a, Ord a, V.Unbox a) => [Point a] -> [Edge a]
 voronoi points =
   let
-    go :: (Floating a, Ord a) => State a -> [Edge a]
+    go :: (Floating a, Ord a, V.Unbox a) => State a -> [Edge a]
     go state = if null (sevents state) then
         sedges $ finish state
         --state
@@ -86,7 +88,7 @@ removeCEvent i j k events =
     > insertEvents newEvents events
     Inserts each Event in /newEvents/ into /events/, keeping the list sorted.
  -}
-insertEvents :: (Floating a, Ord a) => [Event a] -> [Event a] -> [Event a]
+insertEvents :: (Floating a, Ord a, V.Unbox a) => [Event a] -> [Event a] -> [Event a]
 insertEvents news events =
   let
     insertEvent new events' = 
@@ -118,7 +120,7 @@ indexAtRightOf (Breakpoint _ r _ _) = r
     It needs a State to retrieve the coordinates of the centers and evaluate the
     corresponding parabolas.
 -}
-updateBreakpoints :: (Floating a, Ord a) => a -> State a -> [Breakpoint a]
+updateBreakpoints :: (Floating a, Ord a, V.Unbox a) => a -> State a -> [Breakpoint a]
 updateBreakpoints d state =
   let
     breaks = sbreaks state
@@ -133,8 +135,8 @@ updateBreakpoints d state =
       | otherwise = Breakpoint i j rightmost t
       -- otherwise we take the rightmost
       where
-        pi = spoints state !! i
-        pj = spoints state !! j
+        pi = spoints state V.! i
+        pj = spoints state V.! j
         (leftmost, rightmost) = intersection pi pj d
   in
     fmap update breaks
@@ -146,7 +148,7 @@ updateBreakpoints d state =
     results in a new breakpoint, with a corresponding new edge, and possible new
     events, as well as potentially events that need to be removed.
 -}
-joinBreakpoints :: (Floating a, Ord a) => Point a -> Index -> [Breakpoint a] -> [Point a]
+joinBreakpoints :: (Floating a, Ord a, V.Unbox a) => Point a -> Index -> [Breakpoint a] -> V.Vector (Point a)
                 -> ([Breakpoint a], Edge a, [Event a], [(Index, Index, Index)])
 joinBreakpoints p i breaks points =
   let
@@ -181,7 +183,7 @@ joinBreakpoints p i breaks points =
    Process a NewPoint Event. It will result in a new set of breakpoints, a new
    edge, and potentially new events and events to be removed.
 -}
-processNewPoint :: (Floating a, Ord a) => State a-> State a
+processNewPoint :: (Floating a, Ord a, V.Unbox a) => State a-> State a
 processNewPoint state =
   let
     (NewPoint idx p) = head . sevents $ state
@@ -254,7 +256,7 @@ processNewPoint state =
     Process a CircleEvent Event. It will join the converging breakpoints and
     adjusts the events and edges accordingly.
 -}
-processCircleEvent :: (Floating a, Ord a) => State a -> State a
+processCircleEvent :: (Floating a, Ord a, V.Unbox a) => State a -> State a
 processCircleEvent state = 
   let
     (CircleEvent i j k y p) = head $ sevents state
@@ -308,7 +310,7 @@ processCircleEvent state =
     Advance the sweeping line to the next Event. Just applies the corresponding
     processing function to the next event.
 -}
-nextEvent :: (Floating a, Ord a) => State a -> State a
+nextEvent :: (Floating a, Ord a, V.Unbox a) => State a -> State a
 nextEvent state
   | null (sevents state) = state
   | otherwise =
@@ -321,7 +323,7 @@ nextEvent state
     extend to infinity. This function trims those edges to a bounding box 10
     units bigger than the most extreme vertices.
 -}
-finish :: (Floating a, Ord a) => State a -> State a
+finish :: (Floating a, Ord a, V.Unbox a) => State a -> State a
 finish state
   | null (sbreaks state) = state
   | otherwise =
@@ -349,9 +351,9 @@ finish state
         foldl1 (\(a,x) (b,y) -> (min a b, max x y)) ys
 
       xs' = (\x -> (x, x)) <$>
-        concatMap (uncurry $ flip (:) . (:[])) points
+        concatMap (uncurry $ flip (:) . (:[])) (V.toList points)
       ys' = (\x -> (x, x)) <$>
-        concatMap (uncurry $ flip (:) . (:[])) points
+        concatMap (uncurry $ flip (:) . (:[])) (V.toList points)
       (minX', maxX') = (\(a, b) -> (a, b)) $
         foldl1 (\(a,x) (b,y) -> (min a b, max x y)) xs'
       (minY', maxY') = (\(a, b) -> (a, b)) $
@@ -398,11 +400,12 @@ finish state
 {- |
     Create an initial state from a given set of centers.
 -}
-mkState :: (Floating a, Ord a) => [Point a] -> State a
-mkState points =
+mkState :: (Floating a, Ord a, V.Unbox a) => [Point a] -> State a
+mkState points' =
   let
+    points = V.fromList points'
     sorted = sortOn (snd.snd) $
-      foldl (\acc x -> (length acc, x):acc)  [] points
+      V.foldl (\acc x -> (length acc, x):acc)  [] points
     events = tail $ fmap (uncurry NewPoint) sorted
   in
     State points events [] [] (fst $ head sorted)
@@ -416,12 +419,12 @@ edge i j = Edge (min i j) (max i j)
 
 -- | Given three indexes and the list of points, check if the three points at
 -- the indexes form a circle, and create the corresponding CircleEvent.
-circleEvent :: (Floating a, Ord a) => Index -> Index -> Index -> [Point a] -> Maybe (Event a)
+circleEvent :: (Floating a, Ord a, V.Unbox a) => Index -> Index -> Index -> V.Vector (Point a) -> Maybe (Event a)
 circleEvent i j k points = case circle of
     Just (c@(_, y), r) -> Just $ CircleEvent i j k (y + r) c
     _ -> Nothing
   where
-    circle = circleFrom3Points (points !! i) (points !! j) (points !! k)
+    circle = circleFrom3Points (points V.! i) (points V.! j) (points V.! k)
 -- | 'evalParabola focus directrix x' evaluates the parabola defined by the
 -- focus and directrix at x
 evalParabola :: (Floating a) => Point a -> a -> a -> Point a
@@ -432,7 +435,7 @@ evalParabola (fx, fy) d x = (x, (fx*fx-2*fx*x+fy*fy-d*d+x*x)/(2*fy-2*d))
     Find the intersection between the parabolas with focus /f1/ and /f2/ and
     directrix /d/. The resulting points are ordered in increasing x-coordinate.
 -}
-intersection :: (Floating a, Ord a) => Point a -> Point a -> a -> (Point a, Point a)
+intersection :: (Floating a, Ord a, V.Unbox a) => Point a -> Point a -> a -> (Point a, Point a)
 intersection (f1x, f1y) (f2x, f2y) d =
   let
     dist = (f1x - f2x) * (f1x - f2x) + (f1y - f2y) * (f1y-f2y)
@@ -447,7 +450,7 @@ intersection (f1x, f1y) (f2x, f2y) d =
 
 -- | Returns (Just) the (center, radius) of the circle defined by three given points.
 -- If the points are colinear or counter clockwise, it returns Nothing.
-circleFrom3Points :: (Floating a, Ord a) => Point a -> Point a -> Point a -> Maybe (Point a, a)
+circleFrom3Points :: (Floating a, Ord a, V.Unbox a) => Point a -> Point a -> Point a -> Maybe (Point a, a)
 circleFrom3Points (x1, y1) (x2, y2) (x3,y3) =
   let
     (bax, bay) = (x2 - x1, y2 - y1)
