@@ -226,7 +226,7 @@ processNewPoint state =
 
     -- toRemove :: (Maybe Index, Index, Maybe Index)
     toRemove = (leftIndex, centerIndex, rightIndex)
-
+    
     -- we join the pieces together to form the new list:
     breakswithNewPair = ls ++ newPair ++ rs
 
@@ -247,8 +247,12 @@ processNewPoint state =
       | null breaks = firstPair
       | otherwise   = breakswithNewPair
 
+
+    circleEvents evs = length $ filter (\x -> case x of CircleEvent {} -> True; _ -> False) evs
+    removed = circleEvents (tail $ sevents state) - circleEvents newEvents + length newEvents'
   in
-    state { sbreaks = newBreaks, sedges = newEdges, sevents = newEvents }
+    trace (concat $ intersperse " " $ fmap show $ [circleEvents newEvents, length newEvents', removed]) $
+      state { sbreaks = newBreaks, sedges = newEdges, sevents = newEvents }
 
 {- |
     Process a CircleEvent Event. It will join the converging breakpoints and
@@ -297,7 +301,11 @@ processCircleEvent state =
           right (Edge i j l _) = Edge i j l p
 
     newEdges = newEdge : foldr setVert (sedges state) bs
+
+    circleEvents evs = length $ filter (\x -> case x of CircleEvent {} -> True; _ -> False) evs
+    removed = circleEvents (tail $ sevents state) - circleEvents newEvents + length newEvents'
   in
+    trace (concat $ intersperse " " $ fmap show $ [circleEvents newEvents, length newEvents', removed]) $
 --    trace ("\n" ++ show (length pairindices) ++ " :.: " ++ show (length actualpairs))
 --    trace ("\n" ++ show ids ++ "\n" ++ show bs ++ "\n" ++ show pairindices ++ "\n") $
       state { sbreaks = newBreaks, sevents = newEvents, sedges = newEdges } 
