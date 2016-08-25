@@ -99,8 +99,9 @@ render' points edges colors =
 main =
   let 
     --gen = mkStdGen 1
-    points = testset 48
-    colors' = colors 48
+    n = 48
+    points = testset n
+    colors' = colors n
     final gen = voronoi $ points gen
     line :: Diagram B
     line = strokeLine $ fromVertices $ [p2 (0,0), p2 (1,5)]
