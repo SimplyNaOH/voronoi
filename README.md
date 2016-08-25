@@ -2,6 +2,11 @@
 A haskell implementation of Fortune's Algorithm. Bear in mind: this is a work in progress!
 
 
+## Usage
+
+    stack exec voronoi-exe -- -o [filename].svg -w [width]
+You can also try `stack exec voronoi-exe -- -h` for more options.
+
 ## Description
 
 The library code is in voronoi/src/Fortune.hs, where the Module **Fortune** is defined. This module exports two types and the function **voronoi**.
@@ -18,6 +23,8 @@ The executable with source in voronoi/app/Main.hs uses the Diagrams framework to
 
 ## TODO:
 
-* ~~Implement Fortune's Algorithm~~
-* Calculate Delaunay triangulation from the voronoi diagram
-* Implement Lloyd's algorithm
+* ~~Implement Fortune's Algorithm.~~
+* Solve space leak in current implementation.
+* Use a more appropiate data-structure for the lists used in the algorithm.
+* Calculate Delaunay triangulation from the voronoi diagram.
+* Implement Lloyd's algorithm.
