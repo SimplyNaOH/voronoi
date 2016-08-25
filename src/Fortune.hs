@@ -6,15 +6,13 @@ module Fortune
   )
 where
 
-import Debug.Trace (trace)
+--import Debug.Trace (trace)
 
-import Control.Arrow ((***), (&&&))
+import Control.Arrow ((***))
 
-import Data.List
+import Data.List (findIndex, findIndices, elemIndex, sortOn)
 
-import Data.Maybe (isNothing, fromJust, maybeToList, catMaybes)
-
-import Data.Tuple (swap)
+import Data.Maybe (fromJust, maybeToList, catMaybes)
 
 import qualified  Data.Vector.Unboxed as V
 
@@ -23,9 +21,13 @@ type Index = Int
 
 type Point a = (a, a)
 
-data Event a = NewPoint Index (Point a)
-           | CircleEvent Index Index Index a (Point a)
-           deriving Show
+
+data NewPointEvent a = NewPoint Index (Point a) deriving Show
+data CircleEvent a = CircleEvent Index Index Index a (Point a) deriving Show
+
+--data Event a = NewPoint Index (Point a)
+--           | CircleEvent Index Index Index a (Point a)
+--           deriving Show
 
 data Type = L | R deriving Show
 
@@ -36,7 +38,8 @@ data Edge a = Edge Index Index (Point a) (Point a) deriving Show
 data State a = State
   {
     spoints :: V.Vector (Point a)
-  , sevents :: [Event a]
+  , snewpointevents :: [NewPointEvent a]
+  , scircleevents :: [CircleEvent a]
   , sbreaks :: [Breakpoint a]
   , sedges  :: [Edge a]
   , sfirst  :: Index
@@ -52,7 +55,7 @@ voronoi :: (Floating a, Ord a, V.Unbox a) => [Point a] -> [Edge a]
 voronoi points =
   let
     go :: (Floating a, Ord a, V.Unbox a) => State a -> [Edge a]
-    go state = if null (sevents state) then
+    go state = if null (snewpointevents state) && null (scircleevents state) then
         sedges $ finish state
         --state
       else
@@ -70,15 +73,13 @@ voronoi points =
     > removeCEvent i j k events
     Remove a CircleEvent identified by the 3 indexes /i j k/ from /events/.
 -}
-removeCEvent :: (Floating a) => Index -> Index -> Index -> [Event a] 
-             -> [Event a]
+removeCEvent :: (Floating a) => Index -> Index -> Index -> [CircleEvent a] 
+             -> [CircleEvent a]
 removeCEvent i j k events =
   let
     removeFromList x xs = let (ls,rs) = splitAt x xs in ls ++ tail rs
-    index = findIndex (search) events
-    search event = case event of
-      CircleEvent i' j' k' _ _ -> [i',j',k'] == [i,j,k]
-      _ -> False
+    index = findIndex search events
+    search (CircleEvent i' j' k' _ _) = [i',j',k'] == [i,j,k]
   in
    case index of
      Nothing -> events
@@ -88,15 +89,14 @@ removeCEvent i j k events =
     > insertEvents newEvents events
     Inserts each Event in /newEvents/ into /events/, keeping the list sorted.
  -}
-insertEvents :: (Floating a, Ord a, V.Unbox a) => [Event a] -> [Event a] -> [Event a]
+insertEvents :: (Floating a, Ord a, V.Unbox a)
+             =>[CircleEvent a] -> [CircleEvent a] -> [CircleEvent a]
 insertEvents news events =
   let
     insertEvent new events' = 
       let
         CircleEvent _ _ _ y _ = new
-        (ls, rs) = span (\x -> case x of
-          CircleEvent _ _ _ y' _ -> y' < y
-          NewPoint _ (_,y') -> y' < y) events'
+        (ls, rs) = span (\(CircleEvent _ _ _ y' _) -> y' < y) events'
       in
         if y /= 0 then
           ls ++ new : rs
@@ -148,8 +148,10 @@ updateBreakpoints d state =
     results in a new breakpoint, with a corresponding new edge, and possible new
     events, as well as potentially events that need to be removed.
 -}
-joinBreakpoints :: (Floating a, Ord a, V.Unbox a) => Point a -> Index -> [Breakpoint a] -> V.Vector (Point a)
-                -> ([Breakpoint a], Edge a, [Event a], [(Index, Index, Index)])
+joinBreakpoints :: (Floating a, Ord a, V.Unbox a) 
+                => Point a -> Index -> [Breakpoint a] -> V.Vector (Point a)
+                -> ([Breakpoint a], Edge a
+                   , [CircleEvent a], [(Index, Index, Index)])
 joinBreakpoints p i breaks points =
   let
     (Breakpoint l c _ _) = breaks !! i -- l = left, c = center
@@ -186,7 +188,7 @@ joinBreakpoints p i breaks points =
 processNewPoint :: (Floating a, Ord a, V.Unbox a) => State a-> State a
 processNewPoint state =
   let
-    (NewPoint idx p) = head . sevents $ state
+    (NewPoint idx p) = head . snewpointevents $ state
     breaks = updateBreakpoints (snd p) state
     points = spoints state
     (ls, rs) = span (\(Breakpoint _ _ (x,_) _) -> x < fst p) breaks
@@ -238,19 +240,19 @@ processNewPoint state =
       | null breaks = [firstEdge]
       | otherwise   = newEdge : sedges state
 
-    newEvents
-      | null breaks = tail $ sevents state
-      | otherwise   = insertEvents newEvents' $
+    newCircleEvents =
+      insertEvents newEvents' $
         (case toRemove of
           (Just i, j, Just k) -> removeCEvent i j k
-          _ -> id)  $ tail $ sevents state
+          _ -> id)  $ scircleevents state
 
     newBreaks
       | null breaks = firstPair
       | otherwise   = breakswithNewPair
 
   in
-    state { sbreaks = newBreaks, sedges = newEdges, sevents = newEvents }
+    state { sbreaks = newBreaks, sedges = newEdges, scircleevents = newCircleEvents,
+    snewpointevents = tail (snewpointevents state) }
 
 {- |
     Process a CircleEvent Event. It will join the converging breakpoints and
@@ -259,7 +261,7 @@ processNewPoint state =
 processCircleEvent :: (Floating a, Ord a, V.Unbox a) => State a -> State a
 processCircleEvent state = 
   let
-    (CircleEvent i j k y p) = head $ sevents state
+    (CircleEvent i j k y p) = head $ scircleevents state
     breaks = updateBreakpoints y state
     points = spoints state
 
@@ -286,7 +288,7 @@ processCircleEvent state =
 
     uncurry3 f (a,b,c) = f a b c
     newEvents = insertEvents newEvents' $
-      foldr (uncurry3 removeCEvent) (tail $ sevents state) toRemove
+      foldr (uncurry3 removeCEvent) (tail $ scircleevents state) toRemove
     
     setVert (Breakpoint l r _ t) edges = 
       case t of
@@ -300,9 +302,7 @@ processCircleEvent state =
 
     newEdges = newEdge : foldr setVert (sedges state) bs
   in
---    trace ("\n" ++ show (length pairindices) ++ " :.: " ++ show (length actualpairs))
---    trace ("\n" ++ show ids ++ "\n" ++ show bs ++ "\n" ++ show pairindices ++ "\n") $
-      state { sbreaks = newBreaks, sevents = newEvents, sedges = newEdges } 
+      state { sbreaks = newBreaks, scircleevents = newEvents, sedges = newEdges } 
 
 -- ** Algorithm
 
@@ -312,11 +312,19 @@ processCircleEvent state =
 -}
 nextEvent :: (Floating a, Ord a, V.Unbox a) => State a -> State a
 nextEvent state
-  | null (sevents state) = state
+  | null (snewpointevents state) && null (scircleevents state) = state
   | otherwise =
-    case head (sevents state) of
-      NewPoint {} -> processNewPoint state
-      CircleEvent {} -> processCircleEvent state
+    if nextIsCircle then
+      processCircleEvent state
+    else
+      processNewPoint state
+  where
+    nextPointY = (\(NewPoint _ (_, y)) -> y) $ head $ snewpointevents state
+    nextCircleY = (\(CircleEvent _ _ _ y _) -> y) $ head $ scircleevents state
+    nextIsCircle
+      | null (snewpointevents state) = True
+      | null (scircleevents state) = False
+      | otherwise = nextCircleY <= nextPointY
 
 {- |
     After finishing processing all events, we may end up with breakpoints that
@@ -408,7 +416,7 @@ mkState points' =
       V.foldl (\acc x -> (length acc, x):acc)  [] points
     events = tail $ fmap (uncurry NewPoint) sorted
   in
-    State points events [] [] (fst $ head sorted)
+    State points events [] [] [] (fst $ head sorted)
 
 
 -- ** Helper functions
@@ -419,7 +427,9 @@ edge i j = Edge (min i j) (max i j)
 
 -- | Given three indexes and the list of points, check if the three points at
 -- the indexes form a circle, and create the corresponding CircleEvent.
-circleEvent :: (Floating a, Ord a, V.Unbox a) => Index -> Index -> Index -> V.Vector (Point a) -> Maybe (Event a)
+circleEvent :: (Floating a, Ord a, V.Unbox a)
+            => Index -> Index -> Index
+            -> V.Vector (Point a) -> Maybe (CircleEvent a)
 circleEvent i j k points = case circle of
     Just (c@(_, y), r) -> Just $ CircleEvent i j k (y + r) c
     _ -> Nothing
@@ -435,7 +445,8 @@ evalParabola (fx, fy) d x = (x, (fx*fx-2*fx*x+fy*fy-d*d+x*x)/(2*fy-2*d))
     Find the intersection between the parabolas with focus /f1/ and /f2/ and
     directrix /d/. The resulting points are ordered in increasing x-coordinate.
 -}
-intersection :: (Floating a, Ord a, V.Unbox a) => Point a -> Point a -> a -> (Point a, Point a)
+intersection :: (Floating a, Ord a, V.Unbox a) 
+             => Point a -> Point a -> a -> (Point a, Point a)
 intersection (f1x, f1y) (f2x, f2y) d =
   let
     dist = (f1x - f2x) * (f1x - f2x) + (f1y - f2y) * (f1y-f2y)
@@ -450,7 +461,8 @@ intersection (f1x, f1y) (f2x, f2y) d =
 
 -- | Returns (Just) the (center, radius) of the circle defined by three given points.
 -- If the points are colinear or counter clockwise, it returns Nothing.
-circleFrom3Points :: (Floating a, Ord a, V.Unbox a) => Point a -> Point a -> Point a -> Maybe (Point a, a)
+circleFrom3Points :: (Floating a, Ord a, V.Unbox a) 
+                  => Point a -> Point a -> Point a -> Maybe (Point a, a)
 circleFrom3Points (x1, y1) (x2, y2) (x3,y3) =
   let
     (bax, bay) = (x2 - x1, y2 - y1)
