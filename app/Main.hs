@@ -29,7 +29,7 @@ testset n gen = sortOn snd $ fmap (\(x,y) -> (x-20,y)) $ centers n 40 gen
 main =
   let 
     gen = mkStdGen 1
-    n = 48
+    n = 2000
     points = testset n
     final gen = voronoi $ points gen
   in --do
