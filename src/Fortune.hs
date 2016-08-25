@@ -31,7 +31,7 @@ data CircleEvent a = CircleEvent Index Index Index a (Point a) deriving Show
 
 data Type = L | R deriving Show
 
-data Breakpoint a = Breakpoint Index Index (Point a) Type deriving Show
+data Breakpoint a = Breakpoint Index Index a Type deriving Show
 
 data Edge a = Edge Index Index (Point a) (Point a) deriving Show
 
@@ -127,7 +127,7 @@ updateBreakpoints d state =
     -- Breakpoints are always taken from left to right (increasing x). So which
     -- of the two intersections between parabolas i and j we take, depends on
     -- the y-coordinate of the focus point of each parabola:
-    update (Breakpoint i j _ t)
+{-    update (Breakpoint i j _ t)
       | snd pi < snd pj = Breakpoint i j leftmost t
       -- if the leftmost parabola has a focus point further away from the
       -- sweeping line (which is necessarily greater than all points being
@@ -135,9 +135,16 @@ updateBreakpoints d state =
       | otherwise = Breakpoint i j rightmost t
       -- otherwise we take the rightmost
       where
-        pi = spoints state V.! i
-        pj = spoints state V.! j
+        pi = spoints state `V.unsafeIndex` i
+        pj = spoints state `V.unsafeIndex` j
         (leftmost, rightmost) = intersection pi pj d
+-}
+    update (Breakpoint i j _ t) =
+        Breakpoint i j inter t
+      where
+        pi = spoints state `V.unsafeIndex` i
+        pj = spoints state `V.unsafeIndex` j
+        inter = intersection pi pj d
   in
     fmap update breaks
 
@@ -157,7 +164,7 @@ joinBreakpoints p i breaks points =
     (Breakpoint l c _ _) = breaks !! i -- l = left, c = center
     (Breakpoint _ r _ _) = breaks !! (i+1) -- r = right
     (ls, rs) = splitAt i breaks
-    newbreak = Breakpoint l r p R
+    newbreak = Breakpoint l r (fst p) R
     newbreaks = ls ++ newbreak:(drop 2 rs)
     newedge = edge l r p p
     -- The following two may fall out of bounds, but are only used when we are
@@ -191,11 +198,11 @@ processNewPoint state =
     (NewPoint idx p) = head . snewpointevents $ state
     breaks = updateBreakpoints (snd p) state
     points = spoints state
-    (ls, rs) = span (\(Breakpoint _ _ (x,_) _) -> x < fst p) breaks
+    (ls, rs) = span (\(Breakpoint _ _ x _) -> x < fst p) breaks
     
     -- There is a special case for the first set of breakpoints:
-    firstPair = [ Breakpoint (sfirst state) idx (fst p, 0) L
-                , Breakpoint idx (sfirst state) (fst p, 0) R]
+    firstPair = [ Breakpoint (sfirst state) idx (fst p) L
+                , Breakpoint idx (sfirst state) (fst p) R]
     firstEdge = edge (sfirst state) idx (fst p, 0) (fst p, 0)
 
     -- If this is not the first pair of breakpoints:
@@ -210,8 +217,8 @@ processNewPoint state =
     centerIndex = if null ls then indexAtLeftOf  $ head rs
                              else indexAtRightOf $ last ls
 
-    newPair = [ Breakpoint centerIndex idx (fst p, 0) L
-              , Breakpoint idx centerIndex (fst p, 0) R]
+    newPair = [ Breakpoint centerIndex idx (fst p) L
+              , Breakpoint idx centerIndex (fst p) R]
 
     newEdge = edge idx centerIndex (0, 0) (0, 0)
 
@@ -394,12 +401,13 @@ finish state
       modifyList pos ele list = let (ls,rs) = splitAt pos list in
         ls ++ ele:tail rs
       
-      setVert (Breakpoint l r p t) edges = case t of
+      setVert (Breakpoint l r x t) edges = case t of
         L -> modifyList index (left edge) edges
         R -> modifyList index (right edge) edges
         where
           index = head $ findIndices (\(Edge a b _ _) -> a == min l r && b == max l r) edges
           edge = edges !! index
+          p = (x, evalParabola (points `V.unsafeIndex` l) (maxY + 20) x)
           left  (Edge i j _ r) = Edge i j (restrict r p) r
           right (Edge i j l _) = Edge i j l (restrict l p)
     in
@@ -434,30 +442,31 @@ circleEvent i j k points = case circle of
     Just (c@(_, y), r) -> Just $ CircleEvent i j k (y + r) c
     _ -> Nothing
   where
-    circle = circleFrom3Points (points V.! i) (points V.! j) (points V.! k)
+    circle = circleFrom3Points (points `V.unsafeIndex` i)
+      (points `V.unsafeIndex` j) (points `V.unsafeIndex` k)
 -- | 'evalParabola focus directrix x' evaluates the parabola defined by the
 -- focus and directrix at x
-evalParabola :: (Floating a) => Point a -> a -> a -> Point a
-evalParabola (fx, fy) d x = (x, (fx*fx-2*fx*x+fy*fy-d*d+x*x)/(2*fy-2*d))
+evalParabola :: (Floating a) => Point a -> a -> a -> a
+evalParabola (fx, fy) d x = (fx*fx-2*fx*x+fy*fy-d*d+x*x)/(2*fy-2*d)
 
 {- |
     > intersection f1 f2 d
     Find the intersection between the parabolas with focus /f1/ and /f2/ and
-    directrix /d/. The resulting points are ordered in increasing x-coordinate.
+    directrix /d/.
 -}
 intersection :: (Floating a, Ord a, V.Unbox a) 
-             => Point a -> Point a -> a -> (Point a, Point a)
+             => Point a -> Point a -> a -> a
 intersection (f1x, f1y) (f2x, f2y) d =
   let
     dist = (f1x - f2x) * (f1x - f2x) + (f1y - f2y) * (f1y-f2y)
     sqroot = sqrt $ dist * (f1y - d) * (f2y - d)
     lastterm = f1x * (d - f2y) - f2x * d
-    x1' = (f1y*f2x - sqroot + lastterm)/(f1y - f2y)
-    x2' = (f1y*f2x + sqroot + lastterm)/(f1y - f2y)
-    x1 = min x1' x2'
-    x2 = max x1' x2'
+    --x1 = (f1y*f2x - sqroot + lastterm)/(f1y - f2y)
+    x = (f1y*f2x + sqroot + lastterm)/(f1y - f2y)
   in
-    (evalParabola (f1x, f1y) d x1, evalParabola (f1x, f1y) d x2)
+    x
+    --evalParabola (f1x, f1y) d x
+    --(evalParabola (f1x, f1y) d x1, evalParabola (f1x, f1y) d x2)
 
 -- | Returns (Just) the (center, radius) of the circle defined by three given points.
 -- If the points are colinear or counter clockwise, it returns Nothing.
