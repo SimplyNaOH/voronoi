@@ -1,5 +1,5 @@
 name:                voronoi
-version:             0.1.0.0
+version:             0.2.0.0
 synopsis:            A simple Fortune's Algorithm implementation
 description:         Please see README.md
 homepage:            https://github.com/SimplyNaOH/vornoi#readme
@@ -15,7 +15,7 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Fortune
+  exposed-modules:     Fortune, Breakpoints
   build-depends:       base >= 4.7 && < 5
                      , vector
   default-language:    Haskell2010

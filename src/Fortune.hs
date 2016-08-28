@@ -6,7 +6,11 @@ module Fortune
   )
 where
 
---import Debug.Trace (trace)
+import Debug.Trace (trace, traceShow)
+
+
+import Breakpoints
+
 
 import Control.Arrow ((***))
 
@@ -31,7 +35,7 @@ data CircleEvent a = CircleEvent Index Index Index a (Point a) deriving Show
 
 data Type = L | R deriving Show
 
-data Breakpoint a = Breakpoint Index Index a Type deriving Show
+--data Breakpoint a = Breakpoint Index Index a Type deriving Show
 
 data Edge a = Edge Index Index (Point a) (Point a) deriving Show
 
@@ -40,9 +44,10 @@ data State a = State
     spoints :: V.Vector (Point a)
   , snewpointevents :: [NewPointEvent a]
   , scircleevents :: [CircleEvent a]
-  , sbreaks :: [Breakpoint a]
+  , sbreaks :: BTree
   , sedges  :: [Edge a]
   , sfirst  :: Index
+  , sprevd  :: a
   } deriving Show
 
 
@@ -51,13 +56,13 @@ data State a = State
     Generate the voronoi diagram (defined by a set of edges) corresponding to
     the given list of centers.
 -}
-voronoi :: (Floating a, Ord a, V.Unbox a) => [Point a] -> [Edge a]
+voronoi :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) => [Point a] -> [Edge a]
 voronoi points =
   let
-    go :: (Floating a, Ord a, V.Unbox a) => State a -> [Edge a]
+    go :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) => State a -> [Edge a]
     go state = if null (snewpointevents state) && null (scircleevents state) then
         sedges $ finish state
-        --state
+        --sedges state
       else
         go (nextEvent state)
   in
@@ -73,7 +78,7 @@ voronoi points =
     > removeCEvent i j k events
     Remove a CircleEvent identified by the 3 indexes /i j k/ from /events/.
 -}
-removeCEvent :: (Floating a) => Index -> Index -> Index -> [CircleEvent a] 
+removeCEvent :: (Show a, Floating a, RealFrac a) => Index -> Index -> Index -> [CircleEvent a] 
              -> [CircleEvent a]
 removeCEvent i j k events =
   let
@@ -89,7 +94,7 @@ removeCEvent i j k events =
     > insertEvents newEvents events
     Inserts each Event in /newEvents/ into /events/, keeping the list sorted.
  -}
-insertEvents :: (Floating a, Ord a, V.Unbox a)
+insertEvents :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a)
              =>[CircleEvent a] -> [CircleEvent a] -> [CircleEvent a]
 insertEvents news events =
   let
@@ -108,45 +113,11 @@ insertEvents news events =
 
 -- ** Breakpoints
 
-indexAtLeftOf :: Breakpoint a -> Index
-indexAtLeftOf  (Breakpoint l _ _ _) = l
+indexAtLeftOf :: Breakpoint -> Index
+indexAtLeftOf = fst
 
-indexAtRightOf :: Breakpoint a -> Index
-indexAtRightOf (Breakpoint _ r _ _) = r
-
-{- |
-    > updateBreakpoints d state
-    Updates the breakpoints in the /state/ at a sweeping coordinate /d/.
-    It needs a State to retrieve the coordinates of the centers and evaluate the
-    corresponding parabolas.
--}
-updateBreakpoints :: (Floating a, Ord a, V.Unbox a) => a -> State a -> [Breakpoint a]
-updateBreakpoints d state =
-  let
-    breaks = sbreaks state
-    -- Breakpoints are always taken from left to right (increasing x). So which
-    -- of the two intersections between parabolas i and j we take, depends on
-    -- the y-coordinate of the focus point of each parabola:
-{-    update (Breakpoint i j _ t)
-      | snd pi < snd pj = Breakpoint i j leftmost t
-      -- if the leftmost parabola has a focus point further away from the
-      -- sweeping line (which is necessarily greater than all points being
-      -- considered) we take the leftmost intersection.
-      | otherwise = Breakpoint i j rightmost t
-      -- otherwise we take the rightmost
-      where
-        pi = spoints state `V.unsafeIndex` i
-        pj = spoints state `V.unsafeIndex` j
-        (leftmost, rightmost) = intersection pi pj d
--}
-    update (Breakpoint i j _ t) =
-        Breakpoint i j inter t
-      where
-        pi = spoints state `V.unsafeIndex` i
-        pj = spoints state `V.unsafeIndex` j
-        inter = intersection pi pj d
-  in
-    fmap update breaks
+indexAtRightOf :: Breakpoint -> Index
+indexAtRightOf = snd
 
 
 {- |
@@ -155,35 +126,42 @@ updateBreakpoints d state =
     results in a new breakpoint, with a corresponding new edge, and possible new
     events, as well as potentially events that need to be removed.
 -}
-joinBreakpoints :: (Floating a, Ord a, V.Unbox a) 
-                => Point a -> Index -> [Breakpoint a] -> V.Vector (Point a)
-                -> ([Breakpoint a], Edge a
+joinBreakpoints :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) 
+                => Point a -> Index -> Index -> Index -> a -> a -> BTree -> V.Vector (Point a)
+                -> (BTree, Edge a
                    , [CircleEvent a], [(Index, Index, Index)])
-joinBreakpoints p i breaks points =
+joinBreakpoints p i j k d d' breaks points =
   let
-    (Breakpoint l c _ _) = breaks !! i -- l = left, c = center
-    (Breakpoint _ r _ _) = breaks !! (i+1) -- r = right
-    (ls, rs) = splitAt i breaks
-    newbreak = Breakpoint l r (fst p) R
-    newbreaks = ls ++ newbreak:(drop 2 rs)
-    newedge = edge l r p p
-    -- The following two may fall out of bounds, but are only used when we are
-    -- sure they exist:
-    prev = indexAtLeftOf  $ breaks !! (i-1)
-    next = indexAtRightOf $ breaks !! (i+2)
+    newbreaks = joinPairAt (fst p) i j k d d' points breaks
+    newedge = edge i k (-1, -1) p
+    
+    prev = inOrderPredecessor (updateBreakpoint (i, j) points d') (i, j) d' points breaks
+    next = inOrderSuccessor (updateBreakpoint (j, k) points d') (j, k) d' points breaks
+
+{-
+    -- TESTING
+    ordered = fmap snd $ inorder breaks
+    index = elemIndex (i, j) ordered
+    index2 = elemIndex (j, k) ordered
+    prevtest = case index of
+      Nothing -> (0, 0)
+      Just idx -> if idx > 0 then ordered !! (idx - 1) else (0,0)
+    nexttest = case index2 of
+      Nothing -> (0, 0)
+      Just idx -> if idx < length ordered - 1 then ordered !! (idx + 1) else (0, 0)
+-}
 
     (newevents, toremove)
-      | i == 0 = 
-        ( maybeToList $ circleEvent l r next points
-        , [(l, c, r), (c, r, next)] )
-
-      | i == length breaks - 2 =
-        ( maybeToList $ circleEvent prev l r points
-        , [(l, c, r), (prev, l, c)] )
+      | prev == (0, 0) = 
+        ( maybeToList $ circleEvent i k (snd next) points
+        , [(i, j, k), (j, k, snd next)] )
+      | next == (0, 0) =
+        ( maybeToList $ circleEvent (fst prev) i k points
+        , [(i, j, k), (fst prev, i, j)] )
       | otherwise = 
-        ( catMaybes [circleEvent l r next points, circleEvent prev l r points]
-        , [(l, c, r), (prev, l, c), (c, r, next)] )
-  in
+        ( catMaybes [circleEvent i k (snd next) points, circleEvent (fst prev) i k points]
+        , [(i, j, k), (fst prev, i, j), (j, k, snd next)] )
+  in 
     (newbreaks, newedge, newevents, toremove)
 
 -- ** Processing events
@@ -192,18 +170,19 @@ joinBreakpoints p i breaks points =
    Process a NewPoint Event. It will result in a new set of breakpoints, a new
    edge, and potentially new events and events to be removed.
 -}
-processNewPoint :: (Floating a, Ord a, V.Unbox a) => State a-> State a
+processNewPoint :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) => State a-> State a
 processNewPoint state =
   let
     (NewPoint idx p) = head . snewpointevents $ state
-    breaks = updateBreakpoints (snd p) state
+    breaks = sbreaks state
     points = spoints state
-    (ls, rs) = span (\(Breakpoint _ _ x _) -> x < fst p) breaks
     
     -- There is a special case for the first set of breakpoints:
-    firstPair = [ Breakpoint (sfirst state) idx (fst p) L
-                , Breakpoint idx (sfirst state) (fst p) R]
-    firstEdge = edge (sfirst state) idx (fst p, 0) (fst p, 0)
+    firstPair = Node Nil (floor (fst p), (sfirst state, idx)) $
+      Node Nil (floor (fst p), (idx, sfirst state)) Nil
+--    firstPair = [ Breakpoint (sfirst state) idx (fst p)
+--                , Breakpoint idx (sfirst state) (fst p)]
+    firstEdge = edge (sfirst state) idx (-1, -1) (-1, -1)
 
     -- If this is not the first pair of breakpoints:
 
@@ -212,15 +191,35 @@ processNewPoint state =
     -- represent the indexes of the centers of the previous and following
     -- parabolic sections to the center one, if there are any, or Nothing.
 
-    leftIndex   = if null ls then Nothing else Just $ indexAtLeftOf  $ last ls
-    rightIndex  = if null rs then Nothing else Just $ indexAtRightOf $ head rs
-    centerIndex = if null ls then indexAtLeftOf  $ head rs
-                             else indexAtRightOf $ last ls
+    (inserted, (j, side)) = insertPair (fst p) idx (snd p) points breaks
 
-    newPair = [ Breakpoint centerIndex idx (fst p) L
-              , Breakpoint idx centerIndex (fst p) R]
+    updated b = updateBreakpoint b points (snd p)
+    
+    (next, prev) = if j == fst side then
+      (side, inOrderPredecessor (updated side) side (snd p) points breaks)
+    else
+      (inOrderSuccessor (updated side) side (snd p) points breaks, side)
+      
 
-    newEdge = edge idx centerIndex (0, 0) (0, 0)
+{-
+    -- TESTING
+    ordered = fmap snd $ inorder inserted
+    index = elemIndex (j, idx) ordered
+    index2 = elemIndex (idx, j) ordered
+    prevtest = case index of
+      Nothing -> (0, 0)
+      Just idx -> if idx > 0 then ordered !! (idx - 1) else (0,0)
+    nexttest = case index2 of
+      Nothing -> (0, 0)
+      Just idx -> if idx < length ordered - 1 then ordered !! (idx + 1) else (0, 0)
+-}
+
+    leftIndex   = if prev == (0, 0) then Nothing else Just $ indexAtLeftOf  $ prev
+    rightIndex  = if next == (0, 0) then Nothing else Just $ indexAtRightOf $ next
+    centerIndex = j
+
+
+    newEdge = edge idx centerIndex (-1, -1) (-1, -1)
 
     
     -- Helper function to create a circle event where the first or last index
@@ -238,78 +237,60 @@ processNewPoint state =
     -- toRemove :: (Maybe Index, Index, Maybe Index)
     toRemove = (leftIndex, centerIndex, rightIndex)
 
-    -- we join the pieces together to form the new list:
-    breakswithNewPair = ls ++ newPair ++ rs
-
     -- Here are all the final values, which take into account wether we are in
     -- the first pair of breakpoints or not:
     newEdges
       | null breaks = [firstEdge]
       | otherwise   = newEdge : sedges state
 
-    newCircleEvents =
-      insertEvents newEvents' $
-        (case toRemove of
-          (Just i, j, Just k) -> removeCEvent i j k
-          _ -> id)  $ scircleevents state
+    newCircleEvents
+      | null breaks = []
+      | otherwise = if any (\(CircleEvent _ _ _ y _) -> y < snd p) newEvents' then error "CircleEvent at previous y" else
+        insertEvents newEvents' $
+          (case toRemove of
+            (Just i, j, Just k) -> removeCEvent i j k
+            _ -> id)  $ scircleevents state
 
     newBreaks
       | null breaks = firstPair
-      | otherwise   = breakswithNewPair
+      | otherwise   = inserted
 
   in
     state { sbreaks = newBreaks, sedges = newEdges, scircleevents = newCircleEvents,
-    snewpointevents = tail (snewpointevents state) }
+      snewpointevents = tail (snewpointevents state), sprevd = snd p}
 
 {- |
     Process a CircleEvent Event. It will join the converging breakpoints and
     adjusts the events and edges accordingly.
 -}
-processCircleEvent :: (Floating a, Ord a, V.Unbox a) => State a -> State a
+processCircleEvent :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) => State a -> State a
 processCircleEvent state = 
   let
     (CircleEvent i j k y p) = head $ scircleevents state
-    breaks = updateBreakpoints y state
+    breaks = sbreaks state
     points = spoints state
-
-    -- We pair up the breakpoints, and calculate the three parabolic section
-    -- they associate:
-    pairs = fmap (\a -> (breaks !! a, breaks !! (a + 1)))
-      [0..(length breaks - 2)]
-    associatedSections = fmap (\(l, r) ->
-      [indexAtLeftOf l, indexAtRightOf l, indexAtRightOf r]) pairs
-    -- The following line assumes the algorithm has done nothing wrong, and thus
-    -- we know for sure that if we are processing a CircleEvent, it's because
-    -- the associated pair of breakpoints exists! If the "fromJust" fails, it
-    -- means that there is an error in the implementation of the algorithm.
-    pairIndex = fromJust $ elemIndex [i, j, k] associatedSections
-    
-    bs = [breaks !! pairIndex, breaks !! (pairIndex+1)]
 
     -- helper function to edit Lists:
     modifyList pos ele list = let (ls,rs) = splitAt pos list in
       ls ++ ele:tail rs
 
     (newBreaks, newEdge, newEvents', toRemove) =
-      joinBreakpoints p pairIndex breaks points
+      joinBreakpoints p i j k y (sprevd state + (y - sprevd state)/2) breaks points
 
     uncurry3 f (a,b,c) = f a b c
     newEvents = insertEvents newEvents' $
       foldr (uncurry3 removeCEvent) (tail $ scircleevents state) toRemove
     
-    setVert (Breakpoint l r _ t) edges = 
-      case t of
-        L -> modifyList index (left edge) edges
-        R -> modifyList index (right edge) edges
-        where
-          index = fromJust $ findIndex (\(Edge a b _ _) -> a == min l r && b == max l r) edges
-          edge = edges !! index
-          left  (Edge i j _ r) = Edge i j p r
-          right (Edge i j l _) = Edge i j l p
+    setVert (i, j) edges
+      | l == (-1, -1) = modifyList index (Edge a b p r) edges
+      | otherwise = modifyList index (Edge a b l p) edges
+      where
+        index = fromJust $ findIndex (\(Edge a b _ _) -> a == min i j && b == max i j) edges
+        Edge a b l r = edges !! index
 
-    newEdges = newEdge : foldr setVert (sedges state) bs
+    newEdges = newEdge : foldr setVert (sedges state) [(i, j), (j, k)]
   in
-      state { sbreaks = newBreaks, scircleevents = newEvents, sedges = newEdges } 
+    state { sbreaks = newBreaks, scircleevents = newEvents, sedges = newEdges, sprevd = y} 
 
 -- ** Algorithm
 
@@ -317,7 +298,7 @@ processCircleEvent state =
     Advance the sweeping line to the next Event. Just applies the corresponding
     processing function to the next event.
 -}
-nextEvent :: (Floating a, Ord a, V.Unbox a) => State a -> State a
+nextEvent :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) => State a -> State a
 nextEvent state
   | null (snewpointevents state) && null (scircleevents state) = state
   | otherwise =
@@ -338,12 +319,14 @@ nextEvent state
     extend to infinity. This function trims those edges to a bounding box 10
     units bigger than the most extreme vertices.
 -}
-finish :: (Floating a, Ord a, V.Unbox a) => State a -> State a
+
+finish :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) => State a -> State a
 finish state
   | null (sbreaks state) = state
   | otherwise =
     let
-      breaks = updateBreakpoints (maxY + 20) state
+      breaks = fmap (\(_, x) -> (updateBreakpoint x points (maxY + 20), x)) $
+        inorder $ sbreaks state
       edges = sedges state
       points = spoints state
 
@@ -401,22 +384,20 @@ finish state
       modifyList pos ele list = let (ls,rs) = splitAt pos list in
         ls ++ ele:tail rs
       
-      setVert (Breakpoint l r x t) edges = case t of
-        L -> modifyList index (left edge) edges
-        R -> modifyList index (right edge) edges
+      setVert (x, (i, j)) edges
+        | l == (-1, -1) = modifyList index (Edge a b (restrict r p) r) edges
+        | otherwise     = modifyList index (Edge a b l (restrict l p)) edges
         where
-          index = head $ findIndices (\(Edge a b _ _) -> a == min l r && b == max l r) edges
-          edge = edges !! index
-          p = (x, evalParabola (points `V.unsafeIndex` l) (maxY + 20) x)
-          left  (Edge i j _ r) = Edge i j (restrict r p) r
-          right (Edge i j l _) = Edge i j l (restrict l p)
+          index = head $ findIndices (\(Edge a b _ _) -> a == min i j && b == max i j) edges
+          Edge a b l r = edges !! index
+          p = (x, evalParabola (points `V.unsafeIndex` i) (maxY + 20) x)
     in
       state { sedges = foldr setVert (sedges state) breaks }
 
 {- |
     Create an initial state from a given set of centers.
 -}
-mkState :: (Floating a, Ord a, V.Unbox a) => [Point a] -> State a
+mkState :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) => [Point a] -> State a
 mkState points' =
   let
     points = V.fromList points'
@@ -424,18 +405,18 @@ mkState points' =
       V.foldl (\acc x -> (length acc, x):acc)  [] points
     events = tail $ fmap (uncurry NewPoint) sorted
   in
-    State points events [] [] [] (fst $ head sorted)
+    State points events [] Nil [] (fst $ head sorted) (snd.snd $ head sorted)
 
 
 -- ** Helper functions
 
 -- | Smart constructor of Edge: it ensures that the indexes are sorted.
-edge :: (Floating a) => Index -> Index -> Point a -> Point a -> Edge a
+edge :: (Show a, Floating a, RealFrac a) => Index -> Index -> Point a -> Point a -> Edge a
 edge i j = Edge (min i j) (max i j) 
 
 -- | Given three indexes and the list of points, check if the three points at
 -- the indexes form a circle, and create the corresponding CircleEvent.
-circleEvent :: (Floating a, Ord a, V.Unbox a)
+circleEvent :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a)
             => Index -> Index -> Index
             -> V.Vector (Point a) -> Maybe (CircleEvent a)
 circleEvent i j k points = case circle of
@@ -446,7 +427,7 @@ circleEvent i j k points = case circle of
       (points `V.unsafeIndex` j) (points `V.unsafeIndex` k)
 -- | 'evalParabola focus directrix x' evaluates the parabola defined by the
 -- focus and directrix at x
-evalParabola :: (Floating a) => Point a -> a -> a -> a
+evalParabola :: (Show a, Floating a, RealFrac a) => Point a -> a -> a -> a
 evalParabola (fx, fy) d x = (fx*fx-2*fx*x+fy*fy-d*d+x*x)/(2*fy-2*d)
 
 {- |
@@ -454,7 +435,7 @@ evalParabola (fx, fy) d x = (fx*fx-2*fx*x+fy*fy-d*d+x*x)/(2*fy-2*d)
     Find the intersection between the parabolas with focus /f1/ and /f2/ and
     directrix /d/.
 -}
-intersection :: (Floating a, Ord a, V.Unbox a) 
+intersection :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) 
              => Point a -> Point a -> a -> a
 intersection (f1x, f1y) (f2x, f2y) d =
   let
@@ -470,7 +451,7 @@ intersection (f1x, f1y) (f2x, f2y) d =
 
 -- | Returns (Just) the (center, radius) of the circle defined by three given points.
 -- If the points are colinear or counter clockwise, it returns Nothing.
-circleFrom3Points :: (Floating a, Ord a, V.Unbox a) 
+circleFrom3Points :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) 
                   => Point a -> Point a -> Point a -> Maybe (Point a, a)
 circleFrom3Points (x1, y1) (x2, y2) (x3,y3) =
   let
@@ -489,3 +470,12 @@ circleFrom3Points (x1, y1) (x2, y2) (x3,y3) =
     else
       Just ((x, y), r)
 
+{-
+-- TESTING
+ps = [(4.875336608745524,0.150657445690765),(-11.216506035212621,11.490726842927694),(-17.913707206936614,11.672517034976156),(15.314369189316707,16.33601558000406),(0.38035112816248784,17.775820279123977),(-11.876298872777857,18.270923221004796),(-5.012380039840515,25.160054714017036),(-9.053182555292008,30.181962786460275),(16.44086477504638,32.48880821636015)] :: [(Double, Double)]
+ini = mkState ps
+steps = iterate nextEvent ini
+bs = fmap sbreaks steps
+bs' = fmap inorder bs
+bs'' d = fmap (fmap (\(_,b) -> (updateBreakpoint b (V.fromList ps) d,b))) bs'
+-}
