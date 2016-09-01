@@ -1,8 +1,15 @@
 {-# OPTIONS_HADDOCK ignore-exports #-}
 module Fortune
-  ( voronoi
+  ( --voronoi
+   mkState
+  , nextEvent
+  , inorder
   , Point (..)
   , Edge (..)
+  , State (..)
+  , Tree (..)
+  , NewPointEvent (..)
+  , CircleEvent (..)
   )
 where
 
@@ -56,6 +63,7 @@ data State a = State
     Generate the voronoi diagram (defined by a set of edges) corresponding to
     the given list of centers.
 -}
+{-
 voronoi :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) => [Point a] -> [Edge a]
 voronoi points =
   let
@@ -67,7 +75,7 @@ voronoi points =
         go (nextEvent state)
   in
     go $ mkState points
-
+-}
 
 
 -- * Private methods

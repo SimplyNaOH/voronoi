@@ -2,29 +2,32 @@
 A haskell implementation of Fortune's Algorithm. Bear in mind: this is a work in progress!
 
 
+## tree-render Branch
+This branch is for debugging/demonstration purposes. It renders the Breakpoint
+Binary Search Tree as it changes during the algorithm.
+
 ## Usage
 
-    stack exec voronoi-exe -- -o [filename].svg -w [width]
-You can also try `stack exec voronoi-exe -- -h` for more options.
+    mkdir anim
+    stack exec voronoi-exe
+This will ask you for the number of centers to run the algorithm on, the number
+of successive steps to render the tree, and the initial step. If the number of
+steps is -1, it will run until the end.
 
-## Description
+An animation can be made out of the result for example using ffmpeg:
+    ffmpeg -r 4 -i ./anim/out_%04d.jpg -pix_fmt yuv420p ./anim/out.mp4
 
-The library code is in voronoi/src/Fortune.hs, where the Module **Fortune** is defined. This module exports two types and the function **voronoi**.
+## Output
+The output images are a schematic representation of the binary tree. Each node
+in the image represents a Breakpoint. Events are color coded:
 
-The type **Point a** is just `type Point a = (a, a)`.
+1. When the next event is a CircleEvent, *yellow* is used to highlith the
+Breakpoints about to be merged.
+2. If the event just processed was a NewPoint event, *red* is used to hightlight
+the new pair of Breakpoints.
+3. If the event just processed was a CircleEvent, *blue* is used to hightlight
+the resulting new Breakpoint.
 
-The type **Edge a** is defined as `data Edge a = Edge Index Index (Point a) (Point a)` where **Index** is just an alias of **Int**. The edge defined by `Edge i j l r` lies between the *i*th and *j*th centers and has vertices *l* and *r*, with **_i_ always less than _j_**.
+There is an example included, example.gif:
 
-The function **voronoi** implements Fortune's Algorithm to generate the voronoi diagram corresponding to a set of **Point**s. The type signature of voronoi, `voronoi :: (Floating a, Ord a) => [Point a] -> [Edge a]`, restricts a.
-
-The executable with source in voronoi/app/Main.hs uses the Diagrams framework to output an svg of the voronoi diagram of a random set of points. As an example, you can view test.svg:
-
-<img src=https://cdn.rawgit.com/SimplyNaOH/voronoi/master/test.svg>.
-
-## TODO:
-
-* ~~Implement Fortune's Algorithm.~~
-* Solve space leak in current implementation.
-* Use a more appropiate data-structure for the lists used in the algorithm.
-* Calculate Delaunay triangulation from the voronoi diagram.
-* Implement Lloyd's algorithm.
+<img src=https://github.com/SimplyNaOH/voronoi/tree-render/example.gif>.

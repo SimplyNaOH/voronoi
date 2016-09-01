@@ -31,6 +31,8 @@ executable voronoi-exe
                      , diagrams == 1.3.0.*
                      , diagrams-lib
                      , diagrams-svg
+                     , diagrams-rasterific
+                     , diagrams-contrib
   default-language:    Haskell2010
 
 test-suite voronoi-test
