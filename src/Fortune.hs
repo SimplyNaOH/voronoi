@@ -19,6 +19,7 @@ import Data.List (findIndex, findIndices, elemIndex, sortOn)
 import Data.Maybe (fromJust, maybeToList, catMaybes)
 
 import qualified  Data.Vector.Unboxed as V
+import qualified Data.Map.Strict as Map
 
 
 type Index = Int
@@ -37,6 +38,7 @@ data Type = L | R deriving Show
 
 --data Breakpoint a = Breakpoint Index Index a Type deriving Show
 
+data IEdge a = PlaceHolder | IEdge (Point a) deriving Show
 data Edge a = Edge Index Index (Point a) (Point a) deriving Show
 
 data State a = State
@@ -45,7 +47,8 @@ data State a = State
   , snewpointevents :: [NewPointEvent a]
   , scircleevents :: [CircleEvent a]
   , sbreaks :: BTree
-  , sedges  :: [Edge a]
+  , sedges  :: Map.Map (Index, Index) (IEdge a)
+  , sfinaledges :: [Edge a]
   , sfirst  :: Index
   , sprevd  :: a
   } deriving Show
@@ -61,7 +64,7 @@ voronoi points =
   let
     go :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) => State a -> [Edge a]
     go state = if null (snewpointevents state) && null (scircleevents state) then
-        sedges $ finish state
+        sfinaledges $ finish state
         --sedges state
       else
         go (nextEvent state)
@@ -128,12 +131,12 @@ indexAtRightOf = snd
 -}
 joinBreakpoints :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) 
                 => Point a -> Index -> Index -> Index -> a -> a -> BTree -> V.Vector (Point a)
-                -> (BTree, Edge a
+                -> (BTree
                    , [CircleEvent a], [(Index, Index, Index)])
 joinBreakpoints p i j k d d' breaks points =
   let
     newbreaks = joinPairAt (fst p) i j k d d' points breaks
-    newedge = edge i k (-1, -1) p
+--    newedge = edge i k (-1, -1) p
     
     prev = inOrderPredecessor (updateBreakpoint (i, j) points d') (i, j) d' points breaks
     next = inOrderSuccessor (updateBreakpoint (j, k) points d') (j, k) d' points breaks
@@ -162,7 +165,7 @@ joinBreakpoints p i j k d d' breaks points =
         ( catMaybes [circleEvent i k (snd next) points, circleEvent (fst prev) i k points]
         , [(i, j, k), (fst prev, i, j), (j, k, snd next)] )
   in 
-    (newbreaks, newedge, newevents, toremove)
+    (newbreaks, newevents, toremove)
 
 -- ** Processing events
 
@@ -182,7 +185,7 @@ processNewPoint state =
       Node Nil (floor (fst p), (idx, sfirst state)) Nil
 --    firstPair = [ Breakpoint (sfirst state) idx (fst p)
 --                , Breakpoint idx (sfirst state) (fst p)]
-    firstEdge = edge (sfirst state) idx (-1, -1) (-1, -1)
+--    firstEdge = edge (sfirst state) idx (-1, -1) (-1, -1)
 
     -- If this is not the first pair of breakpoints:
 
@@ -219,7 +222,7 @@ processNewPoint state =
     centerIndex = j
 
 
-    newEdge = edge idx centerIndex (-1, -1) (-1, -1)
+--    newEdge = edge idx centerIndex (-1, -1) (-1, -1)
 
     
     -- Helper function to create a circle event where the first or last index
@@ -237,11 +240,12 @@ processNewPoint state =
     -- toRemove :: (Maybe Index, Index, Maybe Index)
     toRemove = (leftIndex, centerIndex, rightIndex)
 
+    sortPair a b = (min a b, max a b)
     -- Here are all the final values, which take into account wether we are in
     -- the first pair of breakpoints or not:
     newEdges
-      | null breaks = [firstEdge]
-      | otherwise   = newEdge : sedges state
+      | null breaks = Map.singleton (sortPair (sfirst state) idx) PlaceHolder
+      | otherwise   = Map.insert (sortPair idx centerIndex) PlaceHolder $ sedges state
 
     newCircleEvents
       | null breaks = []
@@ -274,23 +278,29 @@ processCircleEvent state =
     modifyList pos ele list = let (ls,rs) = splitAt pos list in
       ls ++ ele:tail rs
 
-    (newBreaks, newEdge, newEvents', toRemove) =
+    (newBreaks, newEvents', toRemove) =
       joinBreakpoints p i j k y (sprevd state + (y - sprevd state)/2) breaks points
+
+    newEdge = IEdge p
 
     uncurry3 f (a,b,c) = f a b c
     newEvents = insertEvents newEvents' $
       foldr (uncurry3 removeCEvent) (tail $ scircleevents state) toRemove
     
-    setVert (i, j) edges
-      | l == (-1, -1) = modifyList index (Edge a b p r) edges
-      | otherwise = modifyList index (Edge a b l p) edges
-      where
-        index = fromJust $ findIndex (\(Edge a b _ _) -> a == min i j && b == max i j) edges
-        Edge a b l r = edges !! index
+    sortPair a b = (min a b, max a b)
 
-    newEdges = newEdge : foldr setVert (sedges state) [(i, j), (j, k)]
+    setVert (i, j) (edges, finaledges) = case maybeFinalEdge of
+      Just (IEdge p') -> (newMap, (Edge (min i j) (max i j) p' p):finaledges)
+      Nothing -> (newMap, finaledges)
+      where
+        (maybeFinalEdge, newMap) = Map.updateLookupWithKey updateEdge (sortPair i j) edges
+        updateEdge _ PlaceHolder = Just $ IEdge p
+        updateEdge _ _ = Nothing
+
+    (newEdges', newFinalEdges) = foldr setVert (sedges state, sfinaledges state) [(i, j), (j, k)]
+    newEdges = Map.insert (sortPair i k) newEdge newEdges'
   in
-    state { sbreaks = newBreaks, scircleevents = newEvents, sedges = newEdges, sprevd = y} 
+    state { sbreaks = newBreaks, scircleevents = newEvents, sedges = newEdges, sfinaledges = newFinalEdges, sprevd = y} 
 
 -- ** Algorithm
 
@@ -327,7 +337,7 @@ finish state
     let
       breaks = fmap (\(_, x) -> (updateBreakpoint x points (maxY + 20), x)) $
         inorder $ sbreaks state
-      edges = sedges state
+      finaledges = sfinaledges state
       points = spoints state
 
       -- min* and max* hold the extreme values for the edges, while min*' and
@@ -340,9 +350,9 @@ finish state
       -- box plus 20 units on each side.
 
       xs = (\x -> (x, x)) <$>
-        concatMap (\(Edge _ _ (x, _) (x', _)) -> [x, x']) edges
+        concatMap (\(Edge _ _ (x, _) (x', _)) -> [x, x']) finaledges
       ys = (\x -> (x, x)) <$>
-        concatMap (\(Edge _ _ (_, y) (_, y')) -> [y, y']) edges
+        concatMap (\(Edge _ _ (_, y) (_, y')) -> [y, y']) finaledges
       (minX, maxX) = (\(a, b) -> (a - 20, b + 20)) $
         foldl1 (\(a,x) (b,y) -> (min a b, max x y)) xs
       (minY, maxY) = (\(a, b) -> (a - 20, b + 20)) $
@@ -384,15 +394,18 @@ finish state
       modifyList pos ele list = let (ls,rs) = splitAt pos list in
         ls ++ ele:tail rs
       
-      setVert (x, (i, j)) edges
-        | l == (-1, -1) = modifyList index (Edge a b (restrict r p) r) edges
-        | otherwise     = modifyList index (Edge a b l (restrict l p)) edges
+      sortPair a b = (min a b, max a b)
+
+      setVert (x, (i, j)) (edges, finaledges) = case maybeFinalEdge of
+        Just (IEdge p') -> (newMap, (Edge (min i j) (max i j) p' (restrict p' p)):finaledges)
+        Nothing -> (newMap, finaledges)
         where
-          index = head $ findIndices (\(Edge a b _ _) -> a == min i j && b == max i j) edges
-          Edge a b l r = edges !! index
+          (maybeFinalEdge, newMap) = Map.updateLookupWithKey updateEdge (sortPair i j) edges
+          updateEdge _ PlaceHolder = Just $ IEdge p
+          updateEdge _ _ = Nothing
           p = (x, evalParabola (points `V.unsafeIndex` i) (maxY + 20) x)
     in
-      state { sedges = foldr setVert (sedges state) breaks }
+      state { sfinaledges = snd $ foldr setVert (sedges state, sfinaledges state) breaks }
 
 {- |
     Create an initial state from a given set of centers.
@@ -405,7 +418,7 @@ mkState points' =
       V.foldl (\acc x -> (length acc, x):acc)  [] points
     events = tail $ fmap (uncurry NewPoint) sorted
   in
-    State points events [] Nil [] (fst $ head sorted) (snd.snd $ head sorted)
+    State points events [] Nil Map.empty [] (fst $ head sorted) (snd.snd $ head sorted)
 
 
 -- ** Helper functions
