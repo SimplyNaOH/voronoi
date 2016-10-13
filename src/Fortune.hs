@@ -1,3 +1,4 @@
+{-# LANGUAGE StrictData #-}
 {-# OPTIONS_HADDOCK ignore-exports #-}
 module Fortune
   ( voronoi
@@ -27,7 +28,7 @@ type Index = Int
 type Point a = (a, a)
 
 
-data NewPointEvent a = NewPoint Index (Point a) deriving Show
+type NewPointEvent = Index
 data CircleEvent a = CircleEvent Index Index Index a (Point a) deriving Show
 
 --data Event a = NewPoint Index (Point a)
@@ -44,7 +45,7 @@ data Edge a = Edge Index Index (Point a) (Point a) deriving Show
 data State a = State
   {
     spoints :: V.Vector (Point a)
-  , snewpointevents :: [NewPointEvent a]
+  , snewpointevents :: V.Vector NewPointEvent
   , scircleevents :: [CircleEvent a]
   , sbreaks :: BTree
   , sedges  :: Map.Map (Index, Index) (IEdge a)
@@ -63,7 +64,7 @@ voronoi :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) => [Point a] -> [E
 voronoi points =
   let
     go :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) => State a -> [Edge a]
-    go state = if null (snewpointevents state) && null (scircleevents state) then
+    go state = if V.null (snewpointevents state) && null (scircleevents state) then
         sfinaledges $ finish state
         --sedges state
       else
@@ -176,13 +177,14 @@ joinBreakpoints p i j k d d' breaks points =
 processNewPoint :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) => State a-> State a
 processNewPoint state =
   let
-    (NewPoint idx p) = head . snewpointevents $ state
+    idx = V.head . snewpointevents $ state
+    p = V.unsafeIndex points idx
     breaks = sbreaks state
     points = spoints state
     
     -- There is a special case for the first set of breakpoints:
-    firstPair = Node Nil (floor (fst p), (sfirst state, idx)) $
-      Node Nil (floor (fst p), (idx, sfirst state)) Nil
+    firstPair = Node Nil (sfirst state, idx) $
+      Node Nil (idx, sfirst state) Nil
 --    firstPair = [ Breakpoint (sfirst state) idx (fst p)
 --                , Breakpoint idx (sfirst state) (fst p)]
 --    firstEdge = edge (sfirst state) idx (-1, -1) (-1, -1)
@@ -261,7 +263,7 @@ processNewPoint state =
 
   in
     state { sbreaks = newBreaks, sedges = newEdges, scircleevents = newCircleEvents,
-      snewpointevents = tail (snewpointevents state), sprevd = snd p}
+      snewpointevents = V.tail (snewpointevents state), sprevd = snd p}
 
 {- |
     Process a CircleEvent Event. It will join the converging breakpoints and
@@ -310,17 +312,17 @@ processCircleEvent state =
 -}
 nextEvent :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) => State a -> State a
 nextEvent state
-  | null (snewpointevents state) && null (scircleevents state) = state
+  | V.null (snewpointevents state) && null (scircleevents state) = state
   | otherwise =
     if nextIsCircle then
       processCircleEvent state
     else
       processNewPoint state
   where
-    nextPointY = (\(NewPoint _ (_, y)) -> y) $ head $ snewpointevents state
+    nextPointY = (\idx -> snd $ V.unsafeIndex (spoints state) idx) $ V.head $ snewpointevents state
     nextCircleY = (\(CircleEvent _ _ _ y _) -> y) $ head $ scircleevents state
     nextIsCircle
-      | null (snewpointevents state) = True
+      | V.null (snewpointevents state) = True
       | null (scircleevents state) = False
       | otherwise = nextCircleY <= nextPointY
 
@@ -335,7 +337,7 @@ finish state
   | null (sbreaks state) = state
   | otherwise =
     let
-      breaks = fmap (\(_, x) -> (updateBreakpoint x points (maxY + 20), x)) $
+      breaks = fmap (\x -> (updateBreakpoint x points (maxY + 20), x)) $
         inorder $ sbreaks state
       finaledges = sfinaledges state
       points = spoints state
@@ -416,7 +418,7 @@ mkState points' =
     points = V.fromList points'
     sorted = sortOn (snd.snd) $
       V.foldl (\acc x -> (length acc, x):acc)  [] points
-    events = tail $ fmap (uncurry NewPoint) sorted
+    events = V.fromList $ tail $ [0..(length sorted - 1)]
   in
     State points events [] Nil Map.empty [] (fst $ head sorted) (snd.snd $ head sorted)
 

@@ -1,3 +1,5 @@
+{-# LANGUAGE Strict #-}
+
 module Breakpoints 
   ( Tree (..)
   , BTree (..)
@@ -37,7 +39,7 @@ instance Foldable Tree where
   foldr f z (Node Nil x Nil) = f x z
   foldr f z (Node l k r) = foldr f (f k (foldr f z r)) l
 
-type BTree = Tree (Int, Breakpoint)
+type BTree = Tree Breakpoint
 
 
 nilEnd x = Node Nil x Nil
@@ -142,58 +144,49 @@ insertBreakpoint x break d ps tree = case tree of
 -}    
 
 ps = V.fromList [(0,0), (5,5), (3,7), (4, 10)] :: V.Vector (Point Double)
-root = Node Nil (5, (0, 1)) (Node Nil (5, (1, 0)) Nil)  :: BTree
+root = Node Nil (0, 1) (Node Nil (1, 0) Nil)  :: BTree
 --root = Branch (Leaf (5, (0,1))) (Leaf (5, (1,0))) :: BTree Float
 
 
 insert :: (RealFrac a, Show a, Floating a, Ord a, V.Unbox a)
        => a -> Index -> Index -> a -> V.Vector (Point a) -> BTree -> BTree
-insert x i j _ _  Nil = Node Nil (floor x, (i, j)) Nil
-insert x i j d ps n@(Node l b' r)
+insert x i j _ _  Nil = Node Nil (i, j) Nil
+insert x i j d ps (Node l b r)
   | x < updated = Node (insert x i j d ps l) b r
   | x >= updated = Node l b (insert x i j d ps r)
   where
-    b = (floor updated, snd b')
-    updated = updateBreakpoint (snd b') ps d
+    updated = updateBreakpoint b ps d
 
 
 insertPair :: (RealFrac a, Show a, Floating a, Ord a, V.Unbox a)
            => a -> Index -> a -> V.Vector (Point a) -> BTree -> (BTree, (Int, Breakpoint))
-insertPair x k d ps (Node Nil b' Nil)
-  | x < updated = (Node (Node Nil (x', (i, k)) (nilEnd (x', (k, i)))) b Nil, (i, snd b))
-  | otherwise   = (Node Nil b (Node Nil (x', (j, k)) (nilEnd (x', (k, j)))), (j, snd b))
+insertPair x k d ps (Node Nil b Nil)
+  | x < updated = (Node (Node Nil (i, k) (nilEnd (k, i))) b Nil, (i, b))
+  | otherwise   = (Node Nil b (Node Nil (j, k) (nilEnd (k, j))), (j, b))
   where
-    x' = floor x
-    i = fst . snd $ b
-    j = snd . snd $ b
-    updated = updateBreakpoint (snd b') ps d
-    b = (floor updated, snd b')
+    (i, j) = b
+    updated = updateBreakpoint b ps d
 
-insertPair x k d ps (Node Nil b' r)
-  | x < updated = (Node (Node Nil (x', (i, k)) (nilEnd (x', (k, i)))) b r, (i, snd b))
+insertPair x k d ps (Node Nil b r)
+  | x < updated = (Node (Node Nil (i, k) (nilEnd (k, i))) b r, (i, b))
   | otherwise   = (Node Nil b *** id) $ insertPair x k d ps r
   where
-    x' = floor x
-    i = fst . snd $ b
-    updated = updateBreakpoint (snd b') ps d
-    b = (floor updated, snd b')
+    i = fst b
+    updated = updateBreakpoint b ps d
 
 
-insertPair x k d ps (Node l b' Nil)
+insertPair x k d ps (Node l b Nil)
   | x < updated = (flip ((flip Node) b) Nil *** id) $ insertPair x k d ps l
-  | otherwise  = (Node l b $ Node  Nil (x', (j, k)) (nilEnd (x', (k, j))), (j, snd b))
+  | otherwise  = (Node l b $ Node  Nil (j, k) (nilEnd (k, j)), (j, b))
   where
-    x' = floor x
-    j = snd . snd $ b
-    updated = updateBreakpoint (snd b') ps d
-    b = (floor updated, snd b')
+    j = snd b
+    updated = updateBreakpoint b ps d
 
-insertPair x k d ps (Node l b' r)
+insertPair x k d ps (Node l b r)
   | x < updated = (flip ((flip Node) b) r *** id) $ insertPair x k d ps l
   | otherwise   = (Node l b *** id) $ insertPair x k d ps r
   where
-    updated = updateBreakpoint (snd b') ps d
-    b = (floor updated, snd b')
+    updated = updateBreakpoint b ps d
 
 insertPair _ _ _ _ Nil = error "insertPair: Trying to insert in Nil."
 {-
@@ -220,29 +213,29 @@ lookFor :: (RealFrac a, Show a, Floating a, Ord a, V.Unbox a)
         => a -> Breakpoint -> a -> V.Vector (Point a) -> BTree -> BTree
 lookFor _ _ _ _ Nil = Nil -- error "lookFor: reached Nil."
 lookFor x break d ps n@(Node l b r)
-  | break == (snd b) = n
+  | break == b = n
   | x < updated = lookFor x break d ps l
   | x >= updated = lookFor x break d ps r
   | otherwise = error "lookFor: Breakpoint does not exist."
   where
-    updated = updateBreakpoint (snd b) ps d
+    updated = updateBreakpoint b ps d
 
 delete :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a)
        => a -> Breakpoint -> a -> V.Vector (Point a) -> BTree -> BTree
 delete _ _ _ _ Nil = error "delete: reached Nil"
 delete x break d ps n@(Node l b r)
-  | break == (snd b) = deleteX d ps n
+  | break == b = deleteX d ps n
   | x < updated = Node (delete x break d ps l) b r
   | x >= updated = Node l b (delete x break d ps r)
   | otherwise = error "delete: Breakpoint does not exist."
   where
-    updated = updateBreakpoint (snd b) ps d
+    updated = updateBreakpoint b ps d
 
 deleteX :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a)
         => a -> V.Vector (Point a)-> BTree -> BTree
 deleteX _ _  (Node Nil v t2) = t2
 deleteX _ _  (Node t1 v Nil) = t1
-deleteX d ps (Node t1 v t2)  = Node t1 v2 $ delete (updateBreakpoint (snd v2) ps d) (snd v2) d ps t2 --(delete t2 v2))
+deleteX d ps (Node t1 v t2)  = Node t1 v2 $ delete (updateBreakpoint v2 ps d) v2 d ps t2 --(delete t2 v2))
   where 
     v2 = leftistElement t2
 
@@ -251,8 +244,8 @@ delete2 :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a)
         => a -> Breakpoint -> a -> Breakpoint -> a -> V.Vector (Point a) -> BTree -> BTree
 delete2 _  _  _  _  _ _  Nil = error "delete2: reached Nil"
 delete2 x1 b1 x2 b2 d ps n@(Node l b r)
-  | b1 == snd b = delete x2 b2 d ps $ deleteX d ps n
-  | b2 == snd b = delete x1 b1 d ps $ deleteX d ps n
+  | b1 == b = delete x2 b2 d ps $ deleteX d ps n
+  | b2 == b = delete x1 b1 d ps $ deleteX d ps n
   | x1 < u && x2 < u =
     Node (delete2 x1 b1 x2 b2 d ps l) b r
   | x1 >= u && x2 >= u =
@@ -262,14 +255,14 @@ delete2 x1 b1 x2 b2 d ps n@(Node l b r)
   | otherwise = -- x2 < updated && x1 >= updated
     Node (delete x2 b2 d ps l) b (delete x1 b1 d ps r)
   where
-    u = updateBreakpoint (snd b) ps d
+    u = updateBreakpoint b ps d
 
 -- Return leftist element of tree (is used on subtree)
-leftistElement :: BTree -> (Int, Breakpoint)
+leftistElement :: BTree -> Breakpoint
 leftistElement (Node Nil v _) = v
 leftistElement (Node t1 _ _) = leftistElement t1
 
-rightestElement :: BTree -> (Int, Breakpoint)
+rightestElement :: BTree -> Breakpoint
 rightestElement (Node _ v Nil) = v
 rightestElement (Node _ _ t2) = rightestElement t2
 
@@ -279,15 +272,15 @@ inOrderSuccessor x break d ps tree =
   let
     go s Nil = s
     go succ (Node l b r)
-      | break == snd b = succ
-      | x < updated = go (snd b) l
+      | break == b = succ
+      | x < updated = go b l
       | x > updated = go succ r
       | otherwise = succ
       where
-        updated = updateBreakpoint (snd b) ps d
+        updated = updateBreakpoint b ps d
   in
     case lookFor x break d ps tree of
-      Node _ _ n@(Node {}) -> snd $ leftistElement n
+      Node _ _ n@(Node {}) -> leftistElement n
       _ -> go (0, 0) tree
 
 inOrderPredecessor :: (RealFrac a, Show a, Floating a, Ord a, V.Unbox a)
@@ -296,15 +289,15 @@ inOrderPredecessor x break d ps tree =
   let
     go s Nil = s
     go succ (Node l b r)
-      | break == snd b = succ
+      | break == b = succ
       | x < updated = go succ l
-      | x > updated = go (snd b) r
+      | x > updated = go b r
       | otherwise = succ
       where
-        updated = updateBreakpoint (snd b) ps d
+        updated = updateBreakpoint b ps d
   in
     case lookFor x break d ps tree of
-      Node n@(Node {}) _ _ -> snd $ rightestElement n
+      Node n@(Node {}) _ _ -> rightestElement n
       _ -> go (0, 0) tree
 
 

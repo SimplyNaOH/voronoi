@@ -99,13 +99,16 @@ render' points edges colors =
 main =
   let 
     --gen = mkStdGen 1
-    n = 48
-    points = testset n
-    colors' = colors n
-    final gen = voronoi $ points gen
+    --n = 48
+    points n = testset n
+    colors' n = colors n
+    final n gen = voronoi $ points n gen
     line :: Diagram B
     line = strokeLine $ fromVertices $ [p2 (0,0), p2 (1,5)]
   in do
     gen <- newStdGen
-    mainWith ( (render' (points gen) (final gen) (colors' gen)) # rectEnvelope (p2 (-22,-2)) (r2 (44, 44))  :: Diagram B)
+    n <- getLine
+--    putStrLn $ show $ points (read n) gen
+    putStrLn $ show $ final (read n) gen
+--    mainWith ( (render' (points gen) (final gen) (colors' gen)) # rectEnvelope (p2 (-22,-2)) (r2 (44, 44))  :: Diagram B)
 --    mainWith ( (foldl1 atop (renderedges final)) # rectEnvelope (p2 (-30,-10)) (r2 (60, 60))  :: Diagram B)
