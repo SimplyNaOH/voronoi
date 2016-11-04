@@ -22,9 +22,10 @@ import Control.Arrow ((***))
 
 
 type Index = Int
-type Point a = (a, a)
+type Point = (Double, Double)
 
 type Breakpoint = (Index, Index)
+
 
 
 --data Tree a = Leaf a | Branch (Tree a) (Tree a) deriving Show
@@ -84,7 +85,7 @@ inorder (Node t1 v t2) = inorder t1 ++ [v] ++ inorder t2
 
 -- | 'evalParabola focus directrix x' evaluates the parabola defined by the
 -- focus and directrix at x
-evalParabola :: (Show a, Floating a) => Point a -> a -> a -> a
+evalParabola :: Point -> Double -> Double -> Double
 evalParabola (fx, fy) d x = (fx*fx-2*fx*x+fy*fy-d*d+x*x)/(2*fy-2*d)
 
 {- |
@@ -92,8 +93,7 @@ evalParabola (fx, fy) d x = (fx*fx-2*fx*x+fy*fy-d*d+x*x)/(2*fy-2*d)
     Find the intersection between the parabolas with focus /f1/ and /f2/ and
     directrix /d/.
 -}
-intersection :: (Show a, Floating a) 
-             => Point a -> Point a -> a -> a
+intersection :: Point -> Point -> Double -> Double
 intersection (f1x, f1y) (f2x, f2y) d =
   let
     dist = (f1x - f2x) * (f1x - f2x) + (f1y - f2y) * (f1y-f2y)
@@ -105,7 +105,7 @@ intersection (f1x, f1y) (f2x, f2y) d =
     x
 
 
-updateBreakpoint :: (Show a, Floating a, V.Unbox a) => Breakpoint -> V.Vector (Point a) -> a -> a
+updateBreakpoint :: Breakpoint -> V.Vector Point -> Double -> Double
 updateBreakpoint (i, j)  ps d =
   intersection (V.unsafeIndex ps i) (V.unsafeIndex ps j) d
 
@@ -143,13 +143,12 @@ insertBreakpoint x break d ps tree = case tree of
       Branch (Leaf (x, break)) (Leaf b)
 -}    
 
-ps = V.fromList [(0,0), (5,5), (3,7), (4, 10)] :: V.Vector (Point Double)
+ps = V.fromList [(0,0), (5,5), (3,7), (4, 10)] :: V.Vector Point
 root = Node Nil (0, 1) (Node Nil (1, 0) Nil)  :: BTree
 --root = Branch (Leaf (5, (0,1))) (Leaf (5, (1,0))) :: BTree Float
 
 
-insert :: (RealFrac a, Show a, Floating a, Ord a, V.Unbox a)
-       => a -> Index -> Index -> a -> V.Vector (Point a) -> BTree -> BTree
+insert :: Double -> Index -> Index -> Double -> V.Vector Point -> BTree -> BTree
 insert x i j _ _  Nil = Node Nil (i, j) Nil
 insert x i j d ps (Node l b r)
   | x < updated = Node (insert x i j d ps l) b r
@@ -158,8 +157,7 @@ insert x i j d ps (Node l b r)
     updated = updateBreakpoint b ps d
 
 
-insertPair :: (RealFrac a, Show a, Floating a, Ord a, V.Unbox a)
-           => a -> Index -> a -> V.Vector (Point a) -> BTree -> (BTree, (Int, Breakpoint))
+insertPair :: Double -> Index -> Double -> V.Vector Point -> BTree -> (BTree, (Int, Breakpoint))
 insertPair x k d ps (Node Nil b Nil)
   | x < updated = (Node (Node Nil (i, k) (nilEnd (k, i))) b Nil, (i, b))
   | otherwise   = (Node Nil b (Node Nil (j, k) (nilEnd (k, j))), (j, b))
@@ -209,8 +207,7 @@ insertPair' x k d ps (Node l acc r') (Node Nil b' r)
   | otherwise = 
 -}
 
-lookFor :: (RealFrac a, Show a, Floating a, Ord a, V.Unbox a)
-        => a -> Breakpoint -> a -> V.Vector (Point a) -> BTree -> BTree
+lookFor :: Double -> Breakpoint -> Double -> V.Vector Point -> BTree -> BTree
 lookFor _ _ _ _ Nil = Nil -- error "lookFor: reached Nil."
 lookFor x break d ps n@(Node l b r)
   | break == b = n
@@ -220,8 +217,7 @@ lookFor x break d ps n@(Node l b r)
   where
     updated = updateBreakpoint b ps d
 
-delete :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a)
-       => a -> Breakpoint -> a -> V.Vector (Point a) -> BTree -> BTree
+delete :: Double -> Breakpoint -> Double -> V.Vector Point -> BTree -> BTree
 delete _ _ _ _ Nil = error "delete: reached Nil"
 delete x break d ps n@(Node l b r)
   | break == b = deleteX d ps n
@@ -231,8 +227,7 @@ delete x break d ps n@(Node l b r)
   where
     updated = updateBreakpoint b ps d
 
-deleteX :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a)
-        => a -> V.Vector (Point a)-> BTree -> BTree
+deleteX :: Double -> V.Vector Point-> BTree -> BTree
 deleteX _ _  (Node Nil v t2) = t2
 deleteX _ _  (Node t1 v Nil) = t1
 deleteX d ps (Node t1 v t2)  = Node t1 v2 $ delete (updateBreakpoint v2 ps d) v2 d ps t2 --(delete t2 v2))
@@ -240,8 +235,7 @@ deleteX d ps (Node t1 v t2)  = Node t1 v2 $ delete (updateBreakpoint v2 ps d) v2
     v2 = leftistElement t2
 
 
-delete2 :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a)
-        => a -> Breakpoint -> a -> Breakpoint -> a -> V.Vector (Point a) -> BTree -> BTree
+delete2 :: Double -> Breakpoint -> Double -> Breakpoint -> Double -> V.Vector Point -> BTree -> BTree
 delete2 _  _  _  _  _ _  Nil = error "delete2: reached Nil"
 delete2 x1 b1 x2 b2 d ps n@(Node l b r)
   | b1 == b = delete x2 b2 d ps $ deleteX d ps n
@@ -266,8 +260,7 @@ rightestElement :: BTree -> Breakpoint
 rightestElement (Node _ v Nil) = v
 rightestElement (Node _ _ t2) = rightestElement t2
 
-inOrderSuccessor :: (RealFrac a, Show a, Floating a, Ord a, V.Unbox a)
-         => a -> Breakpoint -> a -> V.Vector (Point a) -> BTree -> Breakpoint
+inOrderSuccessor :: Double -> Breakpoint -> Double -> V.Vector Point -> BTree -> Breakpoint
 inOrderSuccessor x break d ps tree =
   let
     go s Nil = s
@@ -283,8 +276,7 @@ inOrderSuccessor x break d ps tree =
       Node _ _ n@(Node {}) -> leftistElement n
       _ -> go (0, 0) tree
 
-inOrderPredecessor :: (RealFrac a, Show a, Floating a, Ord a, V.Unbox a)
-         => a -> Breakpoint -> a -> V.Vector (Point a) -> BTree -> Breakpoint
+inOrderPredecessor :: Double -> Breakpoint -> Double -> V.Vector Point -> BTree -> Breakpoint
 inOrderPredecessor x break d ps tree =
   let
     go s Nil = s
@@ -302,8 +294,7 @@ inOrderPredecessor x break d ps tree =
 
 
 
-joinPairAt :: (RealFrac a, Show a, Floating a, Ord a, V.Unbox a)
-       => a -> Index -> Index -> Index -> a -> a -> V.Vector (Point a) -> BTree -> BTree 
+joinPairAt :: Double -> Index -> Index -> Index -> Double -> Double -> V.Vector Point -> BTree -> BTree 
 joinPairAt x i j k d d' ps tree =
   insert x i k d ps $ delete2 x1 b1 x2 b2 d' ps tree
   where

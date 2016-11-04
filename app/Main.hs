@@ -18,6 +18,7 @@ import Data.List (sortOn, sortBy, nub, zipWith4)
 import Data.Maybe (fromJust)
 
 
+
 centers :: Int -> Int -> StdGen -> [(Double, Double)]
 centers nCenters nCells gen =
   let
@@ -48,7 +49,7 @@ polygon' :: (Real a) => [(a, a)] -> Diagram B
 polygon' points = strokeLocLoop $ at (closeLine $ fromVertices $ fmap (p2 . toDouble) points) ((p2 . toDouble . head) points)
 
 
-renderedges :: (Real a) => [Edge a] -> [Diagram B]
+renderedges :: [Edge] -> [Diagram B]
 renderedges edges = 
   concatMap (\(Edge _ _ l r) -> if l /= (0,0) && r/=(0,0) then
       [line [l, r]]
@@ -109,6 +110,7 @@ main =
     gen <- newStdGen
     n <- getLine
 --    putStrLn $ show $ points (read n) gen
+--    putStrLn $ seq (final (read n) gen) "done"
     putStrLn $ show $ final (read n) gen
---    mainWith ( (render' (points gen) (final gen) (colors' gen)) # rectEnvelope (p2 (-22,-2)) (r2 (44, 44))  :: Diagram B)
+--    mainWith ( (render' (points (read n) gen) (final (read n) gen) (colors' (read n) gen)) # rectEnvelope (p2 (-22,-2)) (r2 (44, 44))  :: Diagram B)
 --    mainWith ( (foldl1 atop (renderedges final)) # rectEnvelope (p2 (-30,-10)) (r2 (60, 60))  :: Diagram B)

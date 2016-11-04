@@ -19,17 +19,17 @@ import Data.List (findIndex, findIndices, elemIndex, sortOn)
 
 import Data.Maybe (fromJust, maybeToList, catMaybes)
 
-import qualified  Data.Vector.Unboxed as V
+import qualified Data.Vector.Unboxed as V
 import qualified Data.Map.Strict as Map
 
 
 type Index = Int
 
-type Point a = (a, a)
+type Point = (Double, Double)
 
 
 type NewPointEvent = Index
-data CircleEvent a = CircleEvent Index Index Index a (Point a) deriving Show
+data CircleEvent   = CircleEvent Index Index Index Double Point deriving Show
 
 --data Event a = NewPoint Index (Point a)
 --           | CircleEvent Index Index Index a (Point a)
@@ -39,19 +39,19 @@ data Type = L | R deriving Show
 
 --data Breakpoint a = Breakpoint Index Index a Type deriving Show
 
-data IEdge a = PlaceHolder | IEdge (Point a) deriving Show
-data Edge a = Edge Index Index (Point a) (Point a) deriving Show
+data IEdge = PlaceHolder | IEdge Point deriving Show
+data Edge = Edge Index Index Point Point deriving Show
 
-data State a = State
+data State = State
   {
-    spoints :: V.Vector (Point a)
+    spoints :: V.Vector Point
   , snewpointevents :: V.Vector NewPointEvent
-  , scircleevents :: [CircleEvent a]
+  , scircleevents :: [CircleEvent]
   , sbreaks :: BTree
-  , sedges  :: Map.Map (Index, Index) (IEdge a)
-  , sfinaledges :: [Edge a]
+  , sedges  :: Map.Map (Index, Index) IEdge 
+  , sfinaledges :: [Edge]
   , sfirst  :: Index
-  , sprevd  :: a
+  , sprevd  :: Double
   } deriving Show
 
 
@@ -60,10 +60,10 @@ data State a = State
     Generate the voronoi diagram (defined by a set of edges) corresponding to
     the given list of centers.
 -}
-voronoi :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) => [Point a] -> [Edge a]
+voronoi :: [Point] -> [Edge]
 voronoi points =
   let
-    go :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) => State a -> [Edge a]
+    go :: State -> [Edge]
     go state = if V.null (snewpointevents state) && null (scircleevents state) then
         sfinaledges $ finish state
         --sedges state
@@ -82,24 +82,20 @@ voronoi points =
     > removeCEvent i j k events
     Remove a CircleEvent identified by the 3 indexes /i j k/ from /events/.
 -}
-removeCEvent :: (Show a, Floating a, RealFrac a) => Index -> Index -> Index -> [CircleEvent a] 
-             -> [CircleEvent a]
+removeCEvent :: Index -> Index -> Index -> [CircleEvent]
+             -> [CircleEvent]
 removeCEvent i j k events =
   let
-    removeFromList x xs = let (ls,rs) = splitAt x xs in ls ++ tail rs
-    index = findIndex search events
-    search (CircleEvent i' j' k' _ _) = [i',j',k'] == [i,j,k]
+    predicate (CircleEvent i' j' k' _ _) = i' == i && j' == j && k' == k
+    (ls, rs) = break predicate events
   in
-   case index of
-     Nothing -> events
-     Just idx -> removeFromList idx events
+    if not (null rs) then ls ++ tail rs else ls
 
 {- |
     > insertEvents newEvents events
     Inserts each Event in /newEvents/ into /events/, keeping the list sorted.
  -}
-insertEvents :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a)
-             =>[CircleEvent a] -> [CircleEvent a] -> [CircleEvent a]
+insertEvents :: [CircleEvent] -> [CircleEvent] -> [CircleEvent]
 insertEvents news events =
   let
     insertEvent new events' = 
@@ -113,7 +109,6 @@ insertEvents news events =
           events'
   in
     foldr insertEvent events news
-
 
 -- ** Breakpoints
 
@@ -130,10 +125,9 @@ indexAtRightOf = snd
     results in a new breakpoint, with a corresponding new edge, and possible new
     events, as well as potentially events that need to be removed.
 -}
-joinBreakpoints :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) 
-                => Point a -> Index -> Index -> Index -> a -> a -> BTree -> V.Vector (Point a)
+joinBreakpoints :: Point -> Index -> Index -> Index -> Double -> Double -> BTree -> V.Vector Point
                 -> (BTree
-                   , [CircleEvent a], [(Index, Index, Index)])
+                   , [CircleEvent], [(Index, Index, Index)])
 joinBreakpoints p i j k d d' breaks points =
   let
     newbreaks = joinPairAt (fst p) i j k d d' points breaks
@@ -174,7 +168,7 @@ joinBreakpoints p i j k d d' breaks points =
    Process a NewPoint Event. It will result in a new set of breakpoints, a new
    edge, and potentially new events and events to be removed.
 -}
-processNewPoint :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) => State a-> State a
+processNewPoint :: State -> State
 processNewPoint state =
   let
     idx = V.head . snewpointevents $ state
@@ -269,10 +263,10 @@ processNewPoint state =
     Process a CircleEvent Event. It will join the converging breakpoints and
     adjusts the events and edges accordingly.
 -}
-processCircleEvent :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) => State a -> State a
+processCircleEvent :: State -> State
 processCircleEvent state = 
   let
-    (CircleEvent i j k y p) = head $ scircleevents state
+    (CircleEvent i j k y p):events' = scircleevents state
     breaks = sbreaks state
     points = spoints state
 
@@ -287,7 +281,7 @@ processCircleEvent state =
 
     uncurry3 f (a,b,c) = f a b c
     newEvents = insertEvents newEvents' $
-      foldr (uncurry3 removeCEvent) (tail $ scircleevents state) toRemove
+      foldr (uncurry3 removeCEvent) events' toRemove
     
     sortPair a b = (min a b, max a b)
 
@@ -310,7 +304,7 @@ processCircleEvent state =
     Advance the sweeping line to the next Event. Just applies the corresponding
     processing function to the next event.
 -}
-nextEvent :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) => State a -> State a
+nextEvent :: State -> State
 nextEvent state
   | V.null (snewpointevents state) && null (scircleevents state) = state
   | otherwise =
@@ -332,7 +326,7 @@ nextEvent state
     units bigger than the most extreme vertices.
 -}
 
-finish :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) => State a -> State a
+finish :: State -> State
 finish state
   | null (sbreaks state) = state
   | otherwise =
@@ -412,9 +406,10 @@ finish state
 {- |
     Create an initial state from a given set of centers.
 -}
-mkState :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) => [Point a] -> State a
+mkState :: [Point] -> State
 mkState points' =
   let
+
     points = V.fromList points'
     sorted = sortOn (snd.snd) $
       V.foldl (\acc x -> (length acc, x):acc)  [] points
@@ -426,14 +421,13 @@ mkState points' =
 -- ** Helper functions
 
 -- | Smart constructor of Edge: it ensures that the indexes are sorted.
-edge :: (Show a, Floating a, RealFrac a) => Index -> Index -> Point a -> Point a -> Edge a
+edge :: Index -> Index -> Point -> Point -> Edge
 edge i j = Edge (min i j) (max i j) 
 
 -- | Given three indexes and the list of points, check if the three points at
 -- the indexes form a circle, and create the corresponding CircleEvent.
-circleEvent :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a)
-            => Index -> Index -> Index
-            -> V.Vector (Point a) -> Maybe (CircleEvent a)
+circleEvent :: Index -> Index -> Index
+            -> V.Vector Point -> Maybe CircleEvent
 circleEvent i j k points = case circle of
     Just (c@(_, y), r) -> Just $ CircleEvent i j k (y + r) c
     _ -> Nothing
@@ -442,7 +436,7 @@ circleEvent i j k points = case circle of
       (points `V.unsafeIndex` j) (points `V.unsafeIndex` k)
 -- | 'evalParabola focus directrix x' evaluates the parabola defined by the
 -- focus and directrix at x
-evalParabola :: (Show a, Floating a, RealFrac a) => Point a -> a -> a -> a
+evalParabola :: Point -> Double -> Double -> Double
 evalParabola (fx, fy) d x = (fx*fx-2*fx*x+fy*fy-d*d+x*x)/(2*fy-2*d)
 
 {- |
@@ -450,8 +444,7 @@ evalParabola (fx, fy) d x = (fx*fx-2*fx*x+fy*fy-d*d+x*x)/(2*fy-2*d)
     Find the intersection between the parabolas with focus /f1/ and /f2/ and
     directrix /d/.
 -}
-intersection :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) 
-             => Point a -> Point a -> a -> a
+intersection :: Point -> Point -> Double -> Double
 intersection (f1x, f1y) (f2x, f2y) d =
   let
     dist = (f1x - f2x) * (f1x - f2x) + (f1y - f2y) * (f1y-f2y)
@@ -466,8 +459,7 @@ intersection (f1x, f1y) (f2x, f2y) d =
 
 -- | Returns (Just) the (center, radius) of the circle defined by three given points.
 -- If the points are colinear or counter clockwise, it returns Nothing.
-circleFrom3Points :: (Show a, Floating a, RealFrac a, Ord a, V.Unbox a) 
-                  => Point a -> Point a -> Point a -> Maybe (Point a, a)
+circleFrom3Points :: Point -> Point -> Point -> Maybe (Point, Double)
 circleFrom3Points (x1, y1) (x2, y2) (x3,y3) =
   let
     (bax, bay) = (x2 - x1, y2 - y1)
