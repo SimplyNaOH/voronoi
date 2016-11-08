@@ -15,7 +15,7 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Fortune, Breakpoints
+  exposed-modules:     Fortune, BreakpointTree
   build-depends:       base >= 4.7 && < 5
                      , vector
                      , containers
