@@ -1,71 +1,44 @@
 {-# LANGUAGE Strict #-}
-
-module Breakpoints 
-  ( Tree (..)
-  , BTree (..)
+module BreakpointTree
+  ( BTree (..)
   , Breakpoint (..)
+  , Point (..)
+  , insertPar
+  , joinPairAt
   , inOrderSuccessor
   , inOrderPredecessor
-  , insertPair
-  , joinPairAt
-  , updateBreakpoint
-  , inorder
+  , inOrder
   )
 where
-
-
-import Debug.Trace
-
-import qualified Data.Vector.Unboxed as V
 
 import Control.Arrow ((***))
 
 
 type Index = Int
-type Point = (Double, Double)
 
-type Breakpoint = (Index, Index)
+data Point = P !Index !Double !Double deriving (Show)
+data Breakpoint = Breakpoint !Point !Point
 
+instance Show Breakpoint where
+  show (Breakpoint (P i _ _) (P j _ _)) = show (i, j)
 
+instance Eq Breakpoint where
+  (Breakpoint (P i _ _) (P j _ _)) == (Breakpoint (P i' _ _) (P j' _ _)) =
+    i == i' && j == j'
 
---data Tree a = Leaf a | Branch (Tree a) (Tree a) deriving Show
-data Tree a = Nil | Node (Tree a) a (Tree a) deriving Show
+data BTree = Nil | Node BTree Breakpoint BTree
 
-instance Foldable Tree where
-  foldMap f Nil = mempty
-  foldMap f (Node Nil x Nil) = f x
-  foldMap f (Node l k r) = foldMap f l `mappend` f k `mappend` foldMap f r
-
-  foldr f z Nil = z
-  foldr f z (Node Nil x Nil) = f x z
-  foldr f z (Node l k r) = foldr f (f k (foldr f z r)) l
-
-type BTree = Tree Breakpoint
-
-
-nilEnd x = Node Nil x Nil
-
+instance Show BTree where
+  show t = drawTree t ++ "\n" ++ show (inOrder t)
 
 
 -- helper, draw tree:
 drawTree :: BTree -> String
 drawTree = unlines . draw
 
-{-
-draw :: (Show a) => BTree a -> [String]
-draw (Leaf b) = [show b]
-draw (Branch l r) =  "" : drawSubTrees [l, r]
-  where
-    drawSubTrees [] = []
-    drawSubTrees [t] =
-      "|" : shift "`- " "   " (draw t)
-    drawSubTrees (t:ts) =
-      "|" : shift "+- " "|  " (draw t) ++ drawSubTrees ts
-    shift first other = zipWith (++) (first : repeat other)
--}
 
 draw :: BTree -> [String]
-draw Nil = ["Nil"]
+draw Nil = ["#"]
 draw (Node l x r) =  (show x) : drawSubTrees [l, r]
   where
     drawSubTrees [] = []
@@ -75,18 +48,15 @@ draw (Node l x r) =  (show x) : drawSubTrees [l, r]
       "|" : shift "+- " "|  " (draw t) ++ drawSubTrees ts
     shift first other = zipWith (++) (first : repeat other)
 
-inorder :: Tree a -> [a]
-inorder Nil = []
-inorder (Node t1 v t2) = inorder t1 ++ [v] ++ inorder t2
 
-
--- TODO: Insert, Delete, !!, merge, fmap
+nilEnd :: Breakpoint -> BTree
+nilEnd x = Node Nil x Nil
 
 
 -- | 'evalParabola focus directrix x' evaluates the parabola defined by the
 -- focus and directrix at x
 evalParabola :: Point -> Double -> Double -> Double
-evalParabola (fx, fy) d x = (fx*fx-2*fx*x+fy*fy-d*d+x*x)/(2*fy-2*d)
+evalParabola (P _ fx fy) d x = (fx*fx-2*fx*x+fy*fy-d*d+x*x)/(2*fy-2*d)
 
 {- |
     > intersection f1 f2 d
@@ -94,7 +64,7 @@ evalParabola (fx, fy) d x = (fx*fx-2*fx*x+fy*fy-d*d+x*x)/(2*fy-2*d)
     directrix /d/.
 -}
 intersection :: Point -> Point -> Double -> Double
-intersection (f1x, f1y) (f2x, f2y) d =
+intersection (P _ f1x f1y) (P _ f2x f2y) d =
   let
     dist = (f1x - f2x) * (f1x - f2x) + (f1y - f2y) * (f1y-f2y)
     sqroot = sqrt $ dist * (f1y - d) * (f2y - d)
@@ -102,203 +72,174 @@ intersection (f1x, f1y) (f2x, f2y) d =
     --x1 = (f1y*f2x - sqroot + lastterm)/(f1y - f2y)
     x = (f1y*f2x + sqroot + lastterm)/(f1y - f2y)
   in
-    x
-
-
-updateBreakpoint :: Breakpoint -> V.Vector Point -> Double -> Double
-updateBreakpoint (i, j)  ps d =
-  intersection (V.unsafeIndex ps i) (V.unsafeIndex ps j) d
-
-
-{-
-insertPair :: (Show a, Floating a, Ord a, V.Unbox a)
-           => a -> Index -> a -> V.Vector (Point a) -> BTree a -> BTree a
-insertPair x k d ps (Branch l@(Leaf l') r)
-  | updated < x = Branch updated' $ insertPair x k d ps r
-  | otherwise = Branch (insertPair x k d ps updated') r
-  where
-    updated = updateBreakpoint (snd l') ps d 
-    updated' = Leaf (updated, snd l')
-insertPair x k d ps (Leaf b)
-  | updated < x =
-    Branch updated' (Branch (Leaf (x, (j ,k))) (Leaf (x, (k, j))))
-  | otherwise =
-    Branch (Branch (Leaf (x, (i, k))) (Leaf (x, (k, i)))) updated'
-  where
-    i = fst . snd $ b
-    j = snd . snd $ b
-    updated = updateBreakpoint (snd b) ps d 
-    updated' = Leaf (updated, snd b)
-
-insertBreakpoint :: (Show a, Floating a, Ord a, V.Unbox a)
-                 => a -> Breakpoint -> a -> V.Vector (Point a) -> BTree a -> BTree a
-insertBreakpoint x break d ps tree = case tree of
-  Branch l@(Leaf l') r -> if updateBreakpoint (snd l') ps d < x then
-      Branch l $ insertBreakpoint x break d ps r
+    if (abs (f1y - f2y) < 0.0000001) then
+      if f1x < f2x then (f1x + f2x) / 2 else 1/0
     else
-      Branch (insertBreakpoint x break d ps l) r
-  Leaf b -> if updateBreakpoint (snd b) ps d < x then
-      Branch (Leaf b) (Leaf (x, break))
-    else
-      Branch (Leaf (x, break)) (Leaf b)
--}    
+      x
 
-ps = V.fromList [(0,0), (5,5), (3,7), (4, 10)] :: V.Vector Point
-root = Node Nil (0, 1) (Node Nil (1, 0) Nil)  :: BTree
---root = Branch (Leaf (5, (0,1))) (Leaf (5, (1,0))) :: BTree Float
-
-
-insert :: Double -> Index -> Index -> Double -> V.Vector Point -> BTree -> BTree
-insert x i j _ _  Nil = Node Nil (i, j) Nil
-insert x i j d ps (Node l b r)
-  | x < updated = Node (insert x i j d ps l) b r
-  | x >= updated = Node l b (insert x i j d ps r)
+insert :: Double -> Breakpoint -> Double -> BTree -> BTree
+insert _ b' _ Nil = Node Nil b' Nil
+insert x b' d (Node l b r)
+  | x < updated = Node (insert x b' d l) b r
+  | otherwise   = Node l b (insert x b' d r)
   where
-    updated = updateBreakpoint b ps d
+    Breakpoint pl pr = b
+    updated = intersection pl pr d
 
 
-insertPair :: Double -> Index -> Double -> V.Vector Point -> BTree -> (BTree, (Int, Breakpoint))
-insertPair x k d ps (Node Nil b Nil)
-  | x < updated = (Node (Node Nil (i, k) (nilEnd (k, i))) b Nil, (i, b))
-  | otherwise   = (Node Nil b (Node Nil (j, k) (nilEnd (k, j))), (j, b))
+insertPar :: Point -> Double -> BTree -> (BTree, Either Breakpoint Breakpoint)
+
+insertPar p@(P _ x _) d (Node Nil b Nil)
+  | x < updated  = (Node ( Node Nil newl (nilEnd newl') ) b Nil, Left b)
+  | otherwise    = (Node Nil b ( Node Nil newr (nilEnd newr') ), Right b)
   where
-    (i, j) = b
-    updated = updateBreakpoint b ps d
+    Breakpoint pl@(P i _ _) pr@(P j _ _) = b
+    updated = intersection pl pr d
+    newl  = Breakpoint pl p
+    newl' = Breakpoint p  pl
+    newr  = Breakpoint pr p
+    newr' = Breakpoint p  pr
 
-insertPair x k d ps (Node Nil b r)
-  | x < updated = (Node (Node Nil (i, k) (nilEnd (k, i))) b r, (i, b))
-  | otherwise   = (Node Nil b *** id) $ insertPair x k d ps r
+insertPar p@(P _ x _) d (Node Nil b r)
+  | x < updated = (Node ( Node Nil newl (nilEnd newl') ) b r, Left b)
+  | otherwise   = (Node Nil b *** id) $ insertPar p d r
   where
-    i = fst b
-    updated = updateBreakpoint b ps d
+    Breakpoint pl@(P i _ _) pr = b
+    updated = intersection pl pr d
+    newl  = Breakpoint pl p
+    newl' = Breakpoint p  pl
 
-
-insertPair x k d ps (Node l b Nil)
-  | x < updated = (flip ((flip Node) b) Nil *** id) $ insertPair x k d ps l
-  | otherwise  = (Node l b $ Node  Nil (j, k) (nilEnd (k, j)), (j, b))
+insertPar p@(P _ x _) d (Node l b Nil)
+  | x < updated = (flip ((flip Node) b) Nil *** id) $ insertPar p d l
+  | otherwise   = (Node l b $ Node Nil newr (nilEnd newr'), Right b)
   where
-    j = snd b
-    updated = updateBreakpoint b ps d
+    Breakpoint pl pr@(P j _ _) = b
+    updated = intersection pl pr d
+    newr  = Breakpoint pr p
+    newr' = Breakpoint p  pr
 
-insertPair x k d ps (Node l b r)
-  | x < updated = (flip ((flip Node) b) r *** id) $ insertPair x k d ps l
-  | otherwise   = (Node l b *** id) $ insertPair x k d ps r
+insertPar p@(P _ x _) d (Node l b r)
+  | x < updated = (flip ((flip Node) b) r *** id) $ insertPar p d l
+  | otherwise   = (Node l b *** id) $ insertPar p d r
   where
-    updated = updateBreakpoint b ps d
+    Breakpoint pl pr = b
+    updated = intersection pl pr d
 
-insertPair _ _ _ _ Nil = error "insertPair: Trying to insert in Nil."
-{-
-insertPair' :: (RealFrac a, Show a, Floating a, Ord a, V.Unbox a)
-           => a -> Index -> a -> V.Vector (Point a) -> BTree -> BTree -> (BTree, Int)
-insertPair' x k d ps (Node l acc r) (Node Nil b' Nil) = 
-  if acc < updated then (Node l acc res, idx) else (Node res acc r, idx)
-  where
-    x' = floor x
-    i = fst . snd $ b
-    j = snd . snd $ b
-    updated = updateBreakpoint (snd b') ps d
-    b = (floor updated, snd b')
-    (res, idx)
-      | x < updated = (Node (Node Nil (x', (i, k)) (nilEnd (x', (k, i)))) b Nil, i)
-      | otherwise   = (Node Nil b (Node Nil (x', (j, k)) (nilEnd (x', (k, j)))), j)
-
-insertPair' x k d ps (Node l acc r') (Node Nil b' r)
-  | x < updated = 
-  | otherwise = 
--}
-
-lookFor :: Double -> Breakpoint -> Double -> V.Vector Point -> BTree -> BTree
-lookFor _ _ _ _ Nil = Nil -- error "lookFor: reached Nil."
-lookFor x break d ps n@(Node l b r)
-  | break == b = n
-  | x < updated = lookFor x break d ps l
-  | x >= updated = lookFor x break d ps r
-  | otherwise = error "lookFor: Breakpoint does not exist."
-  where
-    updated = updateBreakpoint b ps d
-
-delete :: Double -> Breakpoint -> Double -> V.Vector Point -> BTree -> BTree
-delete _ _ _ _ Nil = error "delete: reached Nil"
-delete x break d ps n@(Node l b r)
-  | break == b = deleteX d ps n
-  | x < updated = Node (delete x break d ps l) b r
-  | x >= updated = Node l b (delete x break d ps r)
-  | otherwise = error "delete: Breakpoint does not exist."
-  where
-    updated = updateBreakpoint b ps d
-
-deleteX :: Double -> V.Vector Point-> BTree -> BTree
-deleteX _ _  (Node Nil v t2) = t2
-deleteX _ _  (Node t1 v Nil) = t1
-deleteX d ps (Node t1 v t2)  = Node t1 v2 $ delete (updateBreakpoint v2 ps d) v2 d ps t2 --(delete t2 v2))
-  where 
-    v2 = leftistElement t2
+insertPar _ _ Nil = error "insertPar: Cannot insert into empty tree."
 
 
-delete2 :: Double -> Breakpoint -> Double -> Breakpoint -> Double -> V.Vector Point -> BTree -> BTree
-delete2 _  _  _  _  _ _  Nil = error "delete2: reached Nil"
-delete2 x1 b1 x2 b2 d ps n@(Node l b r)
-  | b1 == b = delete x2 b2 d ps $ deleteX d ps n
-  | b2 == b = delete x1 b1 d ps $ deleteX d ps n
-  | x1 < u && x2 < u =
-    Node (delete2 x1 b1 x2 b2 d ps l) b r
-  | x1 >= u && x2 >= u =
-    Node l b (delete2 x1 b1 x2 b2 d ps r)
-  | x1 < u = 
-    Node (delete x1 b1 d ps l) b (delete x2 b2 d ps r)
-  | otherwise = -- x2 < updated && x1 >= updated
-    Node (delete x2 b2 d ps l) b (delete x1 b1 d ps r)
-  where
-    u = updateBreakpoint b ps d
+tail' :: BTree -> BTree
+tail' Nil = error "Tail of empty tree."
+tail' (Node Nil _ r) = r
+tail' (Node l b r) = Node (tail' l) b r
 
--- Return leftist element of tree (is used on subtree)
 leftistElement :: BTree -> Breakpoint
-leftistElement (Node Nil v _) = v
-leftistElement (Node t1 _ _) = leftistElement t1
+leftistElement (Node Nil b _) = b
+leftistElement (Node l   _ _) = leftistElement l
 
 rightestElement :: BTree -> Breakpoint
-rightestElement (Node _ v Nil) = v
-rightestElement (Node _ _ t2) = rightestElement t2
+rightestElement (Node _ b Nil) = b
+rightestElement (Node _ _ r) = rightestElement r
 
-inOrderSuccessor :: Double -> Breakpoint -> Double -> V.Vector Point -> BTree -> Breakpoint
-inOrderSuccessor x break d ps tree =
+deleteX :: BTree -> BTree
+deleteX Nil = error "deleteX: Cannot delete Nil"
+deleteX (Node Nil _ r  ) = r
+deleteX (Node l   _ Nil) = l
+deleteX (Node l   _ r  ) = Node l r' $ tail' r
+  where
+    r' = leftistElement r
+
+delete :: Breakpoint -> Double -> BTree -> BTree
+delete _ _ Nil = error "delete: Reached Nil"
+delete b' d n@(Node l b r)
+  | i == i' && j == j' = deleteX n
+  | x <  updated = Node (delete b' d l) b r
+  | x >= updated = Node l b (delete b' d r)
+  where
+    Breakpoint  pl@(P i  _ _)  pr@(P j  _ _) = b
+    Breakpoint pl'@(P i' _ _) pr'@(P j' _ _) = b'
+    updated = intersection pl pr d
+    x = intersection pl' pr' d
+
+delete2 :: Breakpoint -> Breakpoint -> Double -> BTree -> BTree
+delete2 _  _ _  Nil = error "delete2: reached nil."
+delete2 b1 b2 d n@(Node l b r)
+  | i1 == i && j1 == j = delete b2 d $ deleteX n
+  | i2 == i && j2 == j = delete b1 d $ deleteX n
+  | x1 <  u && x2 <  u = Node (delete2 b1 b2 d l) b r
+  | x1 >= u && x2 >= u = Node l b $ delete2 b1 b2 d r
+  | x1 < u =
+    Node (delete b1 d l) b (delete b2 d r)
+  | otherwise = -- x2 < u && x1 >= u
+    Node (delete b2 d l) b (delete b1 d r)
+  where
+    Breakpoint pl1@(P i1 _ _) pr1@(P j1 _ _) = b1
+    Breakpoint pl2@(P i2 _ _) pr2@(P j2 _ _) = b2
+    Breakpoint  pl@(P i  _ _)  pr@(P j  _ _) = b
+    u  = intersection pl pr d
+    x1 = intersection pl1 pr1 d
+    x2 = intersection pl2 pr2 d
+
+joinPairAt :: Double -> Breakpoint -> Breakpoint -> Double -> Double -> BTree
+              -> BTree
+joinPairAt x b1 b2 d d' tree =
+  insert x newB d $ delete2 b1 b2 d' tree
+  where
+    Breakpoint pi@(P i _ _) _ = b1
+    Breakpoint _ pk@(P k _ _) = b2
+    newB = Breakpoint pi pk
+
+lookFor :: Breakpoint -> Double -> BTree -> BTree
+lookFor _ _ Nil = Nil
+lookFor b' d n@(Node l b r)
+  | i == i' && j == j' = n
+  | x <  updated = lookFor b' d l
+  | x >= updated = lookFor b' d r
+  | otherwise = error "lookFor: Breakpoint does not exist."
+  where
+    Breakpoint  pl@(P i  _ _)  pr@(P j  _ _) = b
+    Breakpoint pl'@(P i' _ _) pr'@(P j' _ _) = b'
+    updated = intersection pl pr d
+    x = intersection pl' pr' d
+
+inOrderSuccessor :: Breakpoint -> Double -> BTree -> Breakpoint
+inOrderSuccessor b' d tree =
   let
     go s Nil = s
     go succ (Node l b r)
-      | break == b = succ
+      | i == i' && j == j' = succ
       | x < updated = go b l
       | x > updated = go succ r
       | otherwise = succ
       where
-        updated = updateBreakpoint b ps d
+        Breakpoint  pl@(P i  _ _)  pr@(P j  _ _) = b
+        Breakpoint pl'@(P i' _ _) pr'@(P j' _ _) = b'
+        updated = intersection pl pr d
+        x = intersection pl' pr' d
   in
-    case lookFor x break d ps tree of
+    case lookFor b' d tree of
       Node _ _ n@(Node {}) -> leftistElement n
-      _ -> go (0, 0) tree
+      _ -> go (Breakpoint (P 0 0 0) (P 0 0 0)) tree
 
-inOrderPredecessor :: Double -> Breakpoint -> Double -> V.Vector Point -> BTree -> Breakpoint
-inOrderPredecessor x break d ps tree =
+inOrderPredecessor :: Breakpoint -> Double -> BTree -> Breakpoint
+inOrderPredecessor b' d tree =
   let
     go s Nil = s
     go succ (Node l b r)
-      | break == b = succ
+      | i == i' && j == j' = succ
       | x < updated = go succ l
       | x > updated = go b r
       | otherwise = succ
       where
-        updated = updateBreakpoint b ps d
+        Breakpoint  pl@(P i  _ _)  pr@(P j  _ _) = b
+        Breakpoint pl'@(P i' _ _) pr'@(P j' _ _) = b'
+        updated = intersection pl pr d
+        x = intersection pl' pr' d
   in
-    case lookFor x break d ps tree of
+    case lookFor  b' d tree of
       Node n@(Node {}) _ _ -> rightestElement n
-      _ -> go (0, 0) tree
+      _ -> go (Breakpoint (P 0 0 0) (P 0 0 0)) tree
 
-
-
-joinPairAt :: Double -> Index -> Index -> Index -> Double -> Double -> V.Vector Point -> BTree -> BTree 
-joinPairAt x i j k d d' ps tree =
-  insert x i k d ps $ delete2 x1 b1 x2 b2 d' ps tree
-  where
-    x1 = updateBreakpoint b1 ps d'
-    x2 = updateBreakpoint b2 ps d'
-    b1 = (i, j)
-    b2 = (j, k)
+inOrder :: BTree -> [Breakpoint]
+inOrder Nil = []
+inOrder (Node l b r) = inOrder l ++ [b] ++ inOrder r

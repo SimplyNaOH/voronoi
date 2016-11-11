@@ -49,9 +49,9 @@ polygon' :: (Real a) => [(a, a)] -> Diagram B
 polygon' points = strokeLocLoop $ at (closeLine $ fromVertices $ fmap (p2 . toDouble) points) ((p2 . toDouble . head) points)
 
 
-renderedges :: [Edge] -> [Diagram B]
+renderedges :: [Edge'] -> [Diagram B]
 renderedges edges = 
-  concatMap (\(Edge _ _ l r) -> if l /= (0,0) && r/=(0,0) then
+  concatMap (\(Edge' _ _ l r) -> if l /= (0,0) && r/=(0,0) then
       [line [l, r]]
     else
       []) edges
@@ -59,8 +59,8 @@ renderedges edges =
 
 polygonFrom i points edges =
   let
-    edges' = filter (\(Edge a b _ _) -> a == i || b == i) edges
-    vertices = nub $ concatMap (\(Edge _ _ l r) -> [l,r]) edges'
+    edges' = filter (\(Edge' a b _ _) -> a == i || b == i) edges
+    vertices = nub $ concatMap (\(Edge' _ _ l r) -> [l,r]) edges'
     xs = fmap ((id &&& id) . fst) vertices
     ys = fmap ((id &&& id) . snd) vertices
     n  = fromIntegral $ length vertices
@@ -86,7 +86,7 @@ polygonFrom i points edges =
   in
     polygon' sorted
 
---render :: (Real a) => [(a, a)] -> [Edge a] -> [Color] -> Diagram
+--render :: (Real a) => [(a, a)] -> [Edge' a] -> [Color] -> Diagram
 render' points edges colors = 
   let
     centers :: [Diagram B]

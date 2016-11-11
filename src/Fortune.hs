@@ -1,77 +1,55 @@
 {-# LANGUAGE StrictData #-}
-{-# OPTIONS_HADDOCK ignore-exports #-}
 module Fortune
   ( voronoi
-  , Point (..)
-  , Edge (..)
+  , Edge' (..)
   )
 where
 
-import Debug.Trace (trace, traceShow)
+import BreakpointTree
 
 
-import Breakpoints
+import Control.Monad (liftM, join)
 
+import Data.Maybe (maybeToList, catMaybes)
+import Data.List (sortOn)
 
-import Control.Arrow ((***))
+import qualified Data.Vector.Unboxed as VU
+import qualified Data.Vector as V
 
-import Data.List (findIndex, findIndices, elemIndex, sortOn)
-
-import Data.Maybe (fromJust, maybeToList, catMaybes)
-
-import qualified Data.Vector.Unboxed as V
 import qualified Data.Map.Strict as Map
+import           Data.Map.Strict (Map)
 
 
 type Index = Int
+type Coord = Double
 
-type Point = (Double, Double)
+--data Point = P !Index !Coord !Coord deriving (Show)
+
+type Point'= (Double, Double)
+
+data Edge  = EmptyEdge | IEdge !Point' | Edge !Point' !Point'
+data Edge' = Edge' !Index !Index !Point' !Point' deriving (Show)
+
+type NewPointEvent = Point
+data CircleEvent   = CircleEvent !Point !Point !Point !Coord !Point'
+
+instance Show CircleEvent where
+  show (CircleEvent pi pj pk _ _) = show (pindex pi, pindex pj, pindex pk)
 
 
-type NewPointEvent = Index
-data CircleEvent   = CircleEvent Index Index Index Double Point deriving Show
-
---data Event a = NewPoint Index (Point a)
---           | CircleEvent Index Index Index a (Point a)
---           deriving Show
-
-data Type = L | R deriving Show
-
---data Breakpoint a = Breakpoint Index Index a Type deriving Show
-
-data IEdge = PlaceHolder | IEdge Point deriving Show
-data Edge = Edge Index Index Point Point deriving Show
+data Events = Events
+  {
+    newPointEvents :: V.Vector NewPointEvent
+  , circleEvents   :: [CircleEvent]
+  }
 
 data State = State
   {
-    spoints :: V.Vector Point
-  , snewpointevents :: V.Vector NewPointEvent
-  , scircleevents :: [CircleEvent]
-  , sbreaks :: BTree
-  , sedges  :: Map.Map (Index, Index) IEdge 
-  , sfinaledges :: [Edge]
-  , sfirst  :: Index
-  , sprevd  :: Double
-  } deriving Show
-
-
-
-{- |
-    Generate the voronoi diagram (defined by a set of edges) corresponding to
-    the given list of centers.
--}
-voronoi :: [Point] -> [Edge]
-voronoi points =
-  let
-    go :: State -> [Edge]
-    go state = if V.null (snewpointevents state) && null (scircleevents state) then
-        sfinaledges $ finish state
-        --sedges state
-      else
-        go (nextEvent state)
-  in
-    go $ mkState points
-
+    events :: Events
+  , breaks :: BTree
+  , edges :: Map (Index, Index) Edge
+  , prevd  :: Double
+  }
 
 
 -- * Private methods
@@ -82,11 +60,12 @@ voronoi points =
     > removeCEvent i j k events
     Remove a CircleEvent identified by the 3 indexes /i j k/ from /events/.
 -}
-removeCEvent :: Index -> Index -> Index -> [CircleEvent]
+removeCEvent :: Point -> Point -> Point -> [CircleEvent]
              -> [CircleEvent]
-removeCEvent i j k events =
+removeCEvent (P i _ _) (P j _ _) (P k _ _) events =
   let
-    predicate (CircleEvent i' j' k' _ _) = i' == i && j' == j && k' == k
+    predicate x = let CircleEvent (P i' _ _) (P j' _ _) (P k' _ _) _ _ = x in
+      i' == i && j' == j && k' == k
     (ls, rs) = break predicate events
   in
     if not (null rs) then ls ++ tail rs else ls
@@ -96,371 +75,38 @@ removeCEvent i j k events =
     Inserts each Event in /newEvents/ into /events/, keeping the list sorted.
  -}
 insertEvents :: [CircleEvent] -> [CircleEvent] -> [CircleEvent]
-insertEvents news events =
+insertEvents toAdd events =
   let
-    insertEvent new events' = 
+    insertEvent toAdd' events' = 
       let
-        CircleEvent _ _ _ y _ = new
+        CircleEvent _ _ _ y _ = toAdd'
         (ls, rs) = span (\(CircleEvent _ _ _ y' _) -> y' < y) events'
       in
         if y /= 0 then
-          ls ++ new : rs
+          ls ++ toAdd' : rs
         else
           events'
   in
-    foldr insertEvent events news
+    foldr insertEvent events toAdd
 
--- ** Breakpoints
+-- ** Helper Functions
 
-indexAtLeftOf :: Breakpoint -> Index
-indexAtLeftOf = fst
+pindex (P i _ _) = i
+breakNull (Breakpoint (P i _ _) (P j _ _)) = i == 0 && j == 0
+pointAtLeftOf (Breakpoint l _) = l
+pointAtRightOf (Breakpoint _ r) = r
 
-indexAtRightOf :: Breakpoint -> Index
-indexAtRightOf = snd
+sortPair a b = if a < b then (a, b) else (b, a)
 
+setVert :: Point' -> Edge -> Edge
+setVert p EmptyEdge  = IEdge p
+setVert p (IEdge p') = Edge p' p
 
-{- |
-    > joinBreakpoints p i breaks
-    Join breakpoint /i/ and /i+1/ at the point /p/. Joining two breakpoints
-    results in a new breakpoint, with a corresponding new edge, and possible new
-    events, as well as potentially events that need to be removed.
--}
-joinBreakpoints :: Point -> Index -> Index -> Index -> Double -> Double -> BTree -> V.Vector Point
-                -> (BTree
-                   , [CircleEvent], [(Index, Index, Index)])
-joinBreakpoints p i j k d d' breaks points =
-  let
-    newbreaks = joinPairAt (fst p) i j k d d' points breaks
---    newedge = edge i k (-1, -1) p
-    
-    prev = inOrderPredecessor (updateBreakpoint (i, j) points d') (i, j) d' points breaks
-    next = inOrderSuccessor (updateBreakpoint (j, k) points d') (j, k) d' points breaks
-
-{-
-    -- TESTING
-    ordered = fmap snd $ inorder breaks
-    index = elemIndex (i, j) ordered
-    index2 = elemIndex (j, k) ordered
-    prevtest = case index of
-      Nothing -> (0, 0)
-      Just idx -> if idx > 0 then ordered !! (idx - 1) else (0,0)
-    nexttest = case index2 of
-      Nothing -> (0, 0)
-      Just idx -> if idx < length ordered - 1 then ordered !! (idx + 1) else (0, 0)
--}
-
-    (newevents, toremove)
-      | prev == (0, 0) = 
-        ( maybeToList $ circleEvent i k (snd next) points
-        , [(i, j, k), (j, k, snd next)] )
-      | next == (0, 0) =
-        ( maybeToList $ circleEvent (fst prev) i k points
-        , [(i, j, k), (fst prev, i, j)] )
-      | otherwise = 
-        ( catMaybes [circleEvent i k (snd next) points, circleEvent (fst prev) i k points]
-        , [(i, j, k), (fst prev, i, j), (j, k, snd next)] )
-  in 
-    (newbreaks, newevents, toremove)
-
--- ** Processing events
-
-{-|
-   Process a NewPoint Event. It will result in a new set of breakpoints, a new
-   edge, and potentially new events and events to be removed.
--}
-processNewPoint :: State -> State
-processNewPoint state =
-  let
-    idx = V.head . snewpointevents $ state
-    p = V.unsafeIndex points idx
-    breaks = sbreaks state
-    points = spoints state
-    
-    -- There is a special case for the first set of breakpoints:
-    firstPair = Node Nil (sfirst state, idx) $
-      Node Nil (idx, sfirst state) Nil
---    firstPair = [ Breakpoint (sfirst state) idx (fst p)
---                , Breakpoint idx (sfirst state) (fst p)]
---    firstEdge = edge (sfirst state) idx (-1, -1) (-1, -1)
-
-    -- If this is not the first pair of breakpoints:
-
-    -- In the following lines, centerIndex is the index of the center whose
-    -- parabolic section the new breakpoints land on. leftIndex and rightIndex
-    -- represent the indexes of the centers of the previous and following
-    -- parabolic sections to the center one, if there are any, or Nothing.
-
-    (inserted, (j, side)) = insertPair (fst p) idx (snd p) points breaks
-
-    updated b = updateBreakpoint b points (snd p)
-    
-    (next, prev) = if j == fst side then
-      (side, inOrderPredecessor (updated side) side (snd p) points breaks)
-    else
-      (inOrderSuccessor (updated side) side (snd p) points breaks, side)
-      
-
-{-
-    -- TESTING
-    ordered = fmap snd $ inorder inserted
-    index = elemIndex (j, idx) ordered
-    index2 = elemIndex (idx, j) ordered
-    prevtest = case index of
-      Nothing -> (0, 0)
-      Just idx -> if idx > 0 then ordered !! (idx - 1) else (0,0)
-    nexttest = case index2 of
-      Nothing -> (0, 0)
-      Just idx -> if idx < length ordered - 1 then ordered !! (idx + 1) else (0, 0)
--}
-
-    leftIndex   = if prev == (0, 0) then Nothing else Just $ indexAtLeftOf  $ prev
-    rightIndex  = if next == (0, 0) then Nothing else Just $ indexAtRightOf $ next
-    centerIndex = j
-
-
---    newEdge = edge idx centerIndex (-1, -1) (-1, -1)
-
-    
-    -- Helper function to create a circle event where the first or last index
-    -- might be Nothing.
---    circleEvent' :: Maybe Index -> Index -> Maybe Index -> [Event a]
-    circleEvent' i' j k' = case (i', k') of
-      (Just i, Just k) -> maybeToList $ circleEvent i j k points
-      _ -> []
-
-    -- newEvents' might be a list of length 1 or 2, but should never be an empty
-    -- list, as the first pair of breakpoints is  treated separately.
-    newEvents' = circleEvent' leftIndex  centerIndex (Just idx) ++
-                 circleEvent' (Just idx) centerIndex rightIndex
-
-    -- toRemove :: (Maybe Index, Index, Maybe Index)
-    toRemove = (leftIndex, centerIndex, rightIndex)
-
-    sortPair a b = (min a b, max a b)
-    -- Here are all the final values, which take into account wether we are in
-    -- the first pair of breakpoints or not:
-    newEdges
-      | null breaks = Map.singleton (sortPair (sfirst state) idx) PlaceHolder
-      | otherwise   = Map.insert (sortPair idx centerIndex) PlaceHolder $ sedges state
-
-    newCircleEvents
-      | null breaks = []
-      | otherwise = if any (\(CircleEvent _ _ _ y _) -> y < snd p) newEvents' then error "CircleEvent at previous y" else
-        insertEvents newEvents' $
-          (case toRemove of
-            (Just i, j, Just k) -> removeCEvent i j k
-            _ -> id)  $ scircleevents state
-
-    newBreaks
-      | null breaks = firstPair
-      | otherwise   = inserted
-
-  in
-    state { sbreaks = newBreaks, sedges = newEdges, scircleevents = newCircleEvents,
-      snewpointevents = V.tail (snewpointevents state), sprevd = snd p}
-
-{- |
-    Process a CircleEvent Event. It will join the converging breakpoints and
-    adjusts the events and edges accordingly.
--}
-processCircleEvent :: State -> State
-processCircleEvent state = 
-  let
-    (CircleEvent i j k y p):events' = scircleevents state
-    breaks = sbreaks state
-    points = spoints state
-
-    -- helper function to edit Lists:
-    modifyList pos ele list = let (ls,rs) = splitAt pos list in
-      ls ++ ele:tail rs
-
-    (newBreaks, newEvents', toRemove) =
-      joinBreakpoints p i j k y (sprevd state + (y - sprevd state)/2) breaks points
-
-    newEdge = IEdge p
-
-    uncurry3 f (a,b,c) = f a b c
-    newEvents = insertEvents newEvents' $
-      foldr (uncurry3 removeCEvent) events' toRemove
-    
-    sortPair a b = (min a b, max a b)
-
-    setVert (i, j) (edges, finaledges) = case maybeFinalEdge of
-      Just (IEdge p') -> (newMap, (Edge (min i j) (max i j) p' p):finaledges)
-      Nothing -> (newMap, finaledges)
-      where
-        (maybeFinalEdge, newMap) = Map.updateLookupWithKey updateEdge (sortPair i j) edges
-        updateEdge _ PlaceHolder = Just $ IEdge p
-        updateEdge _ _ = Nothing
-
-    (newEdges', newFinalEdges) = foldr setVert (sedges state, sfinaledges state) [(i, j), (j, k)]
-    newEdges = Map.insert (sortPair i k) newEdge newEdges'
-  in
-    state { sbreaks = newBreaks, scircleevents = newEvents, sedges = newEdges, sfinaledges = newFinalEdges, sprevd = y} 
-
--- ** Algorithm
-
-{- |
-    Advance the sweeping line to the next Event. Just applies the corresponding
-    processing function to the next event.
--}
-nextEvent :: State -> State
-nextEvent state
-  | V.null (snewpointevents state) && null (scircleevents state) = state
-  | otherwise =
-    if nextIsCircle then
-      processCircleEvent state
-    else
-      processNewPoint state
-  where
-    nextPointY = (\idx -> snd $ V.unsafeIndex (spoints state) idx) $ V.head $ snewpointevents state
-    nextCircleY = (\(CircleEvent _ _ _ y _) -> y) $ head $ scircleevents state
-    nextIsCircle
-      | V.null (snewpointevents state) = True
-      | null (scircleevents state) = False
-      | otherwise = nextCircleY <= nextPointY
-
-{- |
-    After finishing processing all events, we may end up with breakpoints that
-    extend to infinity. This function trims those edges to a bounding box 10
-    units bigger than the most extreme vertices.
--}
-
-finish :: State -> State
-finish state
-  | null (sbreaks state) = state
-  | otherwise =
-    let
-      breaks = fmap (\x -> (updateBreakpoint x points (maxY + 20), x)) $
-        inorder $ sbreaks state
-      finaledges = sfinaledges state
-      points = spoints state
-
-      -- min* and max* hold the extreme values for the edges, while min*' and
-      -- max*' hold those of the points. This code will figure out which way to
-      -- extend the edge based on the maximum and minimum values of the points.
-      -- That is to say, if for example our x value is nearest to the maximum x
-      -- value of the points, then we will extend to the right (up until maxX,
-      -- the maximum x value of the known edges). In the end, all vertices will
-      -- be bounded to (minX, minY) (maxX, maxY) which is the original bounding
-      -- box plus 20 units on each side.
-
-      xs = (\x -> (x, x)) <$>
-        concatMap (\(Edge _ _ (x, _) (x', _)) -> [x, x']) finaledges
-      ys = (\x -> (x, x)) <$>
-        concatMap (\(Edge _ _ (_, y) (_, y')) -> [y, y']) finaledges
-      (minX, maxX) = (\(a, b) -> (a - 20, b + 20)) $
-        foldl1 (\(a,x) (b,y) -> (min a b, max x y)) xs
-      (minY, maxY) = (\(a, b) -> (a - 20, b + 20)) $
-        foldl1 (\(a,x) (b,y) -> (min a b, max x y)) ys
-
-      xs' = (\x -> (x, x)) <$>
-        concatMap (uncurry $ flip (:) . (:[])) (V.toList points)
-      ys' = (\x -> (x, x)) <$>
-        concatMap (uncurry $ flip (:) . (:[])) (V.toList points)
-      (minX', maxX') = (\(a, b) -> (a, b)) $
-        foldl1 (\(a,x) (b,y) -> (min a b, max x y)) xs'
-      (minY', maxY') = (\(a, b) -> (a, b)) $
-        foldl1 (\(a,x) (b,y) -> (min a b, max x y)) ys'
-
-      
-      inRangeY b = b > minY && b < maxY
-      nearest a (b, c) (d, e) = if abs (a - b) < abs (a - c)
-        then d else e
-
-      -- The guard here is to prevent trying to use the equation for a straight
-      -- line in the case of a (almost) horizontal or (almost) vertical line, as
-      -- the slope would be infinite. "xc" and "yc" are the "corrected" x and y
-      -- value (bounded to the bounding box). We use xc if the corresponding
-      -- y-value falls into rante, or yc with its corresponding x-value.
-
-      restrict (x1,y1) (x',y')
-        | abs (x1 - x') > 0.00001 && abs (y1 - y') > 0.00001 =
-          if inRangeY (snd restrictX) then restrictX else restrictY
-        | abs (x1 - x') <= 0.00001 =
-          (x', yc)
-        | otherwise =
-          (xc, y')
-        where
-          restrictX = (xc, (xc - x1)*(y1 - y')/(x1 - x') + y1)
-          restrictY = ((yc - y1)*(x1 - x')/(y1 - y') + x1, yc)
-          xc = nearest x1 (maxX', minX') (maxX, minX) 
-          yc = nearest y1 (maxY', minY') (maxY, minY) 
-
-      modifyList pos ele list = let (ls,rs) = splitAt pos list in
-        ls ++ ele:tail rs
-      
-      sortPair a b = (min a b, max a b)
-
-      setVert (x, (i, j)) (edges, finaledges) = case maybeFinalEdge of
-        Just (IEdge p') -> (newMap, (Edge (min i j) (max i j) p' (restrict p' p)):finaledges)
-        Nothing -> (newMap, finaledges)
-        where
-          (maybeFinalEdge, newMap) = Map.updateLookupWithKey updateEdge (sortPair i j) edges
-          updateEdge _ PlaceHolder = Just $ IEdge p
-          updateEdge _ _ = Nothing
-          p = (x, evalParabola (points `V.unsafeIndex` i) (maxY + 20) x)
-    in
-      state { sfinaledges = snd $ foldr setVert (sedges state, sfinaledges state) breaks }
-
-{- |
-    Create an initial state from a given set of centers.
--}
-mkState :: [Point] -> State
-mkState points' =
-  let
-
-    points = V.fromList points'
-    sorted = sortOn (snd.snd) $
-      V.foldl (\acc x -> (length acc, x):acc)  [] points
-    events = V.fromList $ tail $ [0..(length sorted - 1)]
-  in
-    State points events [] Nil Map.empty [] (fst $ head sorted) (snd.snd $ head sorted)
-
-
--- ** Helper functions
-
--- | Smart constructor of Edge: it ensures that the indexes are sorted.
-edge :: Index -> Index -> Point -> Point -> Edge
-edge i j = Edge (min i j) (max i j) 
-
--- | Given three indexes and the list of points, check if the three points at
--- the indexes form a circle, and create the corresponding CircleEvent.
-circleEvent :: Index -> Index -> Index
-            -> V.Vector Point -> Maybe CircleEvent
-circleEvent i j k points = case circle of
-    Just (c@(_, y), r) -> Just $ CircleEvent i j k (y + r) c
-    _ -> Nothing
-  where
-    circle = circleFrom3Points (points `V.unsafeIndex` i)
-      (points `V.unsafeIndex` j) (points `V.unsafeIndex` k)
--- | 'evalParabola focus directrix x' evaluates the parabola defined by the
--- focus and directrix at x
-evalParabola :: Point -> Double -> Double -> Double
-evalParabola (fx, fy) d x = (fx*fx-2*fx*x+fy*fy-d*d+x*x)/(2*fy-2*d)
-
-{- |
-    > intersection f1 f2 d
-    Find the intersection between the parabolas with focus /f1/ and /f2/ and
-    directrix /d/.
--}
-intersection :: Point -> Point -> Double -> Double
-intersection (f1x, f1y) (f2x, f2y) d =
-  let
-    dist = (f1x - f2x) * (f1x - f2x) + (f1y - f2y) * (f1y-f2y)
-    sqroot = sqrt $ dist * (f1y - d) * (f2y - d)
-    lastterm = f1x * (d - f2y) - f2x * d
-    --x1 = (f1y*f2x - sqroot + lastterm)/(f1y - f2y)
-    x = (f1y*f2x + sqroot + lastterm)/(f1y - f2y)
-  in
-    x
-    --evalParabola (f1x, f1y) d x
-    --(evalParabola (f1x, f1y) d x1, evalParabola (f1x, f1y) d x2)
-
--- | Returns (Just) the (center, radius) of the circle defined by three given points.
--- If the points are colinear or counter clockwise, it returns Nothing.
-circleFrom3Points :: Point -> Point -> Point -> Maybe (Point, Double)
-circleFrom3Points (x1, y1) (x2, y2) (x3,y3) =
+-- | Returns (Just) the (center, radius) of the circle defined by three given
+--   points.
+--   If the points are colinear or counter clockwise, it returns Nothing.
+circleFrom3Points :: Point -> Point -> Point -> Maybe (Point', Double)
+circleFrom3Points (P _ x1 y1) (P _ x2 y2) (P _ x3 y3) =
   let
     (bax, bay) = (x2 - x1, y2 - y1)
     (cax, cay) = (x3 - x1, y3 - y1)
@@ -477,12 +123,158 @@ circleFrom3Points (x1, y1) (x2, y2) (x3,y3) =
     else
       Just ((x, y), r)
 
-{-
--- TESTING
-ps = [(4.875336608745524,0.150657445690765),(-11.216506035212621,11.490726842927694),(-17.913707206936614,11.672517034976156),(15.314369189316707,16.33601558000406),(0.38035112816248784,17.775820279123977),(-11.876298872777857,18.270923221004796),(-5.012380039840515,25.160054714017036),(-9.053182555292008,30.181962786460275),(16.44086477504638,32.48880821636015)] :: [(Double, Double)]
-ini = mkState ps
-steps = iterate nextEvent ini
-bs = fmap sbreaks steps
-bs' = fmap inorder bs
-bs'' d = fmap (fmap (\(_,b) -> (updateBreakpoint b (V.fromList ps) d,b))) bs'
+circleEvent :: Point -> Point -> Point -> Maybe CircleEvent
+circleEvent pi pj pk = liftM (\(c@(_, y), r) -> CircleEvent pi pj pk (y + r) c)
+  $ circleFrom3Points pi pj pk
+
+
+-- ** Processing events
+
+processCircleEvent :: State -> State
+processCircleEvent state = let
+  -- state data:
+  (CircleEvent pi pj pk y p):cevents = circleEvents . events $ state
+  events' = events $ state
+  bTree = breaks state
+  d     = y
+  d'    = (d + prevd  state) / 2
+
+  -- process breakpoint
+  bl = Breakpoint pi pj
+  br = Breakpoint pj pk
+  newBreak = Breakpoint pi pk
+  newBTree = joinPairAt (fst p) bl br d d' bTree
+
+  -- process events
+  prevB@(Breakpoint prev@(P previ _ _) (P prevj _ _)) = inOrderPredecessor bl d' bTree
+  nextB@(Breakpoint (P nexti _ _) next@(P nextj _ _)) = inOrderSuccessor   br d' bTree
+
+  newCEvents'
+    | previ == 0 && prevj == 0 =
+      maybeToList $ circleEvent pi pk next
+    | nexti == 0 && nextj == 0 =
+      maybeToList $ circleEvent prev pi pk
+    | otherwise =
+      catMaybes [circleEvent pi pk next, circleEvent prev pi pk]
+  
+  toRemove
+    | previ == 0 && prevj == 0 =
+      [(pi, pj, pk), (pj, pk, next)]
+    | nexti == 0 && nextj == 0 =
+      [(pi, pj, pk), (prev, pi, pj)]
+    | otherwise =
+      [(pi, pj, pk), (prev, pi, pj), (pj, pk, next)]
+
+  uncurry3 f (a, b, c) = f a b c
+  newCEvents = insertEvents newCEvents' $ 
+    foldr (uncurry3 removeCEvent) cevents toRemove
+
+  newEvents = events' { circleEvents = newCEvents }
+
+  -- process edge
+  newEdge = IEdge p
+  edgesToUpdate = [sortPair (pindex pi) (pindex pj),
+                   sortPair (pindex pj) (pindex pk)]
+  updatedEdges = foldr (Map.adjust (setVert p)) (edges state) edgesToUpdate
+  newEdges = Map.insert (sortPair (pindex pi) (pindex pk)) newEdge updatedEdges
+
+  pretty (a, b, c) = (pindex a, pindex b, pindex c)
+  in 
+    state { breaks = newBTree, events = newEvents, edges = newEdges, prevd = d }
+
+processNewPointEvent :: State -> State
+processNewPointEvent state = let
+  -- state data:
+  newp@(P idx _ d) = V.head . newPointEvents . events $ state
+  newPEvents       = V.tail . newPointEvents . events $ state
+  cEvents = circleEvents . events $ state
+  events' = events state
+  bTree = breaks state
+
+  (newBTree, fallenOn) = insertPar newp d bTree
+  (prev, next) = case fallenOn of
+    Left  b -> (inOrderPredecessor b d bTree, b)
+    Right b -> (b, inOrderSuccessor b d bTree)
+    -- TODO !! inOrderPred.. and inOrderSucc.. shouldn't need d
+
+  pi = if breakNull prev then Nothing else Just $ pointAtLeftOf prev
+  pk = if breakNull next then Nothing else Just $ pointAtRightOf next
+  pj = case fallenOn of
+    Left b -> pointAtLeftOf b
+    Right b -> pointAtRightOf b
+  
+  newCEvents' = catMaybes [ do pi <- pi; circleEvent pi pj newp
+                          , do pk <- pk; circleEvent newp pj pk]
+  
+  toRemove = (pi, pj, pk)
+
+  newCEvents = insertEvents newCEvents' $
+    (case toRemove of
+      (Just i, j, Just k) -> removeCEvent i j k
+      _ -> id) cEvents
+
+  newEvents = events' { newPointEvents = newPEvents
+                      , circleEvents = newCEvents }
+
+  newEdges = Map.insert (sortPair idx (pindex pj)) EmptyEdge $ 
+    edges state
+
+  in
+    state { breaks = newBTree, events = newEvents, edges = newEdges, prevd = d }
+
+processEvent :: State -> State
+processEvent state
+  | (V.null . newPointEvents . events) state && 
+    (null . circleEvents . events) state = state
+  | otherwise = 
+    if nextIsCircle then
+      processCircleEvent state
+    else
+      processNewPointEvent state
+  where
+    (P _ _ nextPointY) = V.head .  newPointEvents . events $ state
+    (CircleEvent _ _ _ nextCircleY _) = head . circleEvents . events $ state
+    nextIsCircle
+      | (V.null . newPointEvents .events) state = True
+      | (null . circleEvents . events) state = False
+      | otherwise = nextCircleY <= nextPointY
+
+{- |
+    voronoi takes a Vector of pairs of Double(s) and returns a Vector of
+    Edge(s) representing the corresponding voronoi diagram.
 -}
+voronoi :: [Point'] -> [Edge']
+voronoi points =
+  let
+    go :: State -> [Edge']
+    go state = if ((null.newPointEvents.events) state) &&
+      ((null.circleEvents.events) state) then
+      mapToList . edges $ state
+    else
+      go (processEvent state)
+  in
+    go . mkState $ points
+
+mkState :: [Point'] -> State
+mkState points = let
+  ps = sortOn snd points
+  newPEvents' = (V.imap (\i (x, y) -> P i x y)) . V.fromList $ ps
+  newPEvents = V.tail . V.tail $ newPEvents'
+  p0@(P i _ _) = (newPEvents' V.! 0)
+  p1@(P j _ d) = (newPEvents' V.! 1)
+  b1 = Breakpoint p0 p1
+  b2 = Breakpoint p1 p0
+  firstPair = Node Nil b1 $ Node Nil b2 Nil
+  firstEdge = Map.singleton (sortPair i j) EmptyEdge
+  in
+    State (Events newPEvents []) firstPair firstEdge d
+
+mapToList map = let
+  list' = Map.toList map
+  predicate (_, e) = case e of
+    Edge _ _ -> True
+    _ -> False
+  list = filter predicate list'
+  edge' ((i, j), Edge l r) = Edge' i j l r
+  in
+    fmap edge' list
