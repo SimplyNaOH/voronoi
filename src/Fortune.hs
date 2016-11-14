@@ -19,6 +19,9 @@ import qualified Data.Vector as V
 import qualified Data.Map.Strict as Map
 import           Data.Map.Strict (Map)
 
+import qualified Data.HashPSQ as PSQ
+import           Data.HashPSQ (HashPSQ)
+
 
 type Index = Int
 type Coord = Double
@@ -40,7 +43,7 @@ instance Show CircleEvent where
 data Events = Events
   {
     newPointEvents :: V.Vector NewPointEvent
-  , circleEvents   :: [CircleEvent]
+  , circleEvents   :: HashPSQ (Index, Index, Index) Coord CircleEvent
   }
 
 data State = State
@@ -133,7 +136,8 @@ circleEvent pi pj pk = liftM (\(c@(_, y), r) -> CircleEvent pi pj pk (y + r) c)
 processCircleEvent :: State -> State
 processCircleEvent state = let
   -- state data:
-  (CircleEvent pi pj pk y p):cevents = circleEvents . events $ state
+  Just (_, _, (CircleEvent pi@(P i _ _) pj@(P j _ _) pk@(P k _ _) y p), cevents) =
+    PSQ.minView . circleEvents . events $ state
   events' = events $ state
   bTree = breaks state
   d     = y
@@ -159,15 +163,16 @@ processCircleEvent state = let
   
   toRemove
     | previ == 0 && prevj == 0 =
-      [(pi, pj, pk), (pj, pk, next)]
+      [(i, j, k), (j, k, nextj)]
     | nexti == 0 && nextj == 0 =
-      [(pi, pj, pk), (prev, pi, pj)]
+      [(i, j, k), (previ, i, j)]
     | otherwise =
-      [(pi, pj, pk), (prev, pi, pj), (pj, pk, next)]
+      [(i, j, k), (previ, i, j), (j, k, nextj)]
 
-  uncurry3 f (a, b, c) = f a b c
-  newCEvents = insertEvents newCEvents' $ 
-    foldr (uncurry3 removeCEvent) cevents toRemove
+  insert' ev@(CircleEvent pi pj pk y _) =
+    PSQ.insert (pindex pi, pindex pj, pindex pk) y ev
+  removed = foldr PSQ.delete cevents toRemove
+  newCEvents = foldr insert' removed newCEvents'
 
   newEvents = events' { circleEvents = newCEvents }
 
@@ -208,10 +213,12 @@ processNewPointEvent state = let
   
   toRemove = (pi, pj, pk)
 
-  newCEvents = insertEvents newCEvents' $
-    (case toRemove of
-      (Just i, j, Just k) -> removeCEvent i j k
-      _ -> id) cEvents
+  insert' ev@(CircleEvent pi pj pk y _) =
+    PSQ.insert (pindex pi, pindex pj, pindex pk) y ev
+  removed = case toRemove of
+    (Just i, j, Just k) -> PSQ.delete (pindex i, pindex j, pindex k) cEvents
+    _ -> cEvents
+  newCEvents = foldr insert' removed newCEvents'
 
   newEvents = events' { newPointEvents = newPEvents
                       , circleEvents = newCEvents }
@@ -225,7 +232,7 @@ processNewPointEvent state = let
 processEvent :: State -> State
 processEvent state
   | (V.null . newPointEvents . events) state && 
-    (null . circleEvents . events) state = state
+    (PSQ.null . circleEvents . events) state = state
   | otherwise = 
     if nextIsCircle then
       processCircleEvent state
@@ -233,10 +240,10 @@ processEvent state
       processNewPointEvent state
   where
     (P _ _ nextPointY) = V.head .  newPointEvents . events $ state
-    (CircleEvent _ _ _ nextCircleY _) = head . circleEvents . events $ state
+    (Just (_, nextCircleY, _)) = PSQ.findMin . circleEvents . events $ state
     nextIsCircle
       | (V.null . newPointEvents .events) state = True
-      | (null . circleEvents . events) state = False
+      | (PSQ.null . circleEvents . events) state = False
       | otherwise = nextCircleY <= nextPointY
 
 {- |
@@ -267,7 +274,7 @@ mkState points = let
   firstPair = Node Nil b1 $ Node Nil b2 Nil
   firstEdge = Map.singleton (sortPair i j) EmptyEdge
   in
-    State (Events newPEvents []) firstPair firstEdge d
+    State (Events newPEvents PSQ.empty) firstPair firstEdge d
 
 mapToList map = let
   list' = Map.toList map
