@@ -111,6 +111,6 @@ main =
     n <- getLine
 --    putStrLn $ show $ points (read n) gen
 --    putStrLn $ seq (final (read n) gen) "done"
-    putStrLn $ show $ final (read n) gen
---    mainWith ( (render' (points (read n) gen) (final (read n) gen) (colors' (read n) gen)) # rectEnvelope (p2 (-22,-2)) (r2 (44, 44))  :: Diagram B)
+--    putStrLn $ show $ final (read n) gen
+    mainWith ( (render' (points (read n) gen) (final (read n) gen) (colors' (read n) gen)) # rectEnvelope (p2 (-22,-2)) (r2 (44, 44))  :: Diagram B)
 --    mainWith ( (foldl1 atop (renderedges final)) # rectEnvelope (p2 (-30,-10)) (r2 (60, 60))  :: Diagram B)
